@@ -62,10 +62,10 @@ def lambda_handler(event, context):
         except Exception as e:
             span.record_exception(e)
             span.set_status(Status(StatusCode.ERROR, str(e)))
-            logger.error(json.dumps({"error": str(e), "trace_id": trace_id}))
+            logger.error("Request failed", extra={"error": str(e), "trace_id": trace_id})
             raise e
 
-    logger.info(json.dumps({"message": "Success", "trace_id": trace_id}))
+    logger.info("Request succeeded", extra={"trace_id": trace_id})
     return result
 
 def process_request(event):
@@ -101,9 +101,14 @@ counter.add(1, {"item_type": "premium"})
 To enable OpenTelemetry in AWS CDK, you MUST attach the ADOT Lambda Layer to the function and set the appropriate environment variables to enable auto-instrumentation.
 
 ```python
-from aws_cdk import aws_lambda as lambda_
+from aws_cdk import Stack, aws_lambda as lambda_
 
-adot_layer_arn = "arn:aws:lambda:us-east-1:901920570463:layer:aws-otel-python-amd64-ver-1-20-0:1"
+# MANDATORY: Do NOT hardcode the region in ADOT ARN.
+# Use Stack.of(self).region to avoid cross-region 403 authorization failures.
+adot_layer_arn = (
+    f"arn:aws:lambda:{Stack.of(self).region}:901920570463"
+    ":layer:aws-otel-python-amd64-ver-1-20-0:1"
+)
 
 function = lambda_.Function(
     self, 'Function',

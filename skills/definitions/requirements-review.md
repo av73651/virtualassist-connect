@@ -13,9 +13,9 @@ This skill validates requirements documents for completeness, clarity, testabili
 ## 1. REVIEW SCOPE
 
 The requirements review validates:
-- `docs/specs/requirements.md` (output from Stage 1)
+- `docs/specs/lambdas/{name}/{name}-requirements.md` (output from Stage 1)
 
-**Output**: `docs/reviews/requirements-review-report.md`
+**Output**: `docs/specs/lambdas/{name}/reviews/requirements-review-report.md`
 
 ---
 
@@ -287,7 +287,7 @@ The requirements review validates:
 
 ### 3.1 Review Report Structure
 
-**File**: `docs/reviews/requirements-review-report.md`
+**File**: `docs/specs/{service-name}/reviews/requirements-review-report.md`
 
 ```markdown
 # Requirements Review Report
@@ -641,7 +641,7 @@ If REJECTED:
 ### 4.1 Review Execution Steps
 
 1. **Load Requirements Document**
-   - Read `docs/specs/requirements.md`
+   - Read `docs/specs/lambdas/{name}/{name}-requirements.md`
 
 2. **Check Completeness**
    - Verify all sections present
@@ -679,7 +679,7 @@ If REJECTED:
    - Check organization
 
 9. **Generate Report**
-   - Create `docs/reviews/requirements-review-report.md`
+   - Create `docs/specs/lambdas/{name}/reviews/requirements-review-report.md`
    - Categorize issues by severity
    - List open questions
    - Provide recommendations

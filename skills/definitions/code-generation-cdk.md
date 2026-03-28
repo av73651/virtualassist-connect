@@ -28,6 +28,7 @@ from aws_cdk import (
     Stack,
     aws_lambda as lambda_,
     aws_apigateway as apigw,
+    aws_cognito as cognito,
     aws_logs as logs,
     aws_iam as iam,
     Tags,
@@ -60,33 +61,58 @@ class UserApiStack(Stack):
             log_retention=logs.RetentionDays.ONE_WEEK  # MANDATORY: Log retention
         )
 
-        # MANDATORY: Least privilege IAM
+        # MANDATORY: Least privilege IAM — exact table ARN + indexes, no wildcards
+        table_arn = f'arn:aws:dynamodb:{self.region}:{self.account}:table/{self.config["dynamodb"]["table_name"]}'
         user_function.add_to_role_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
                 actions=['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query'],
-                resources=[f'arn:aws:dynamodb:{self.region}:{self.account}:table/users*']
+                resources=[table_arn, f'{table_arn}/index/*']
             )
         )
 
         # MANDATORY: Resource tagging
-        Tags.of(user_function).add('Environment', environment)
+        Tags.of(user_function).add('Environment', self.config["stage"])
         Tags.of(user_function).add('Service', 'user-api')
         Tags.of(user_function).add('ManagedBy', 'CDK')
+
+        # MANDATORY: Cognito Authorizer for authenticated endpoints
+        user_pool = cognito.UserPool.from_user_pool_id(
+            self, 'UserPool', self.config["cognito"]["user_pool_id"]
+        )
+        authorizer = apigw.CognitoUserPoolsAuthorizer(
+            self, 'CognitoAuthorizer',
+            cognito_user_pools=[user_pool]
+        )
 
         # API Gateway with security
         api = apigw.RestApi(
             self, 'UserApi',
-            rest_api_name=f'user-api-{environment}',
+            rest_api_name=f'user-api-{self.config["stage"]}',
             cloud_watch_role=True,  # MANDATORY: CloudWatch logging
             deploy_options=apigw.StageOptions(
-                stage_name=environment,
+                stage_name=self.config["stage"],
                 logging_level=apigw.MethodLoggingLevel.INFO,
-                data_trace_enabled=True,
+                data_trace_enabled=(self.config["stage"] != "prod"),  # NEVER log full payloads in production (PII risk)
                 metrics_enabled=True,  # MANDATORY: Metrics
                 tracing_enabled=True   # MANDATORY: X-Ray
             )
         )
+
+        # MANDATORY: WAF for API protection (DDoS, common attacks)
+        # Associate a WAF WebACL with the API Gateway stage
+        # WebACL should be defined centrally or in a shared security stack
+        # Example: wafv2.CfnWebACLAssociation(self, 'WafAssociation',
+        #     resource_arn=api.deployment_stage.stage_arn,
+        #     web_acl_arn=self.config["waf"]["web_acl_arn"]
+        # )
+
+        # MANDATORY: Apply Cognito authorizer to endpoints
+        # users_resource = api.root.add_resource('users')
+        # users_resource.add_method('POST', apigw.LambdaIntegration(user_function),
+        #     authorization_type=apigw.AuthorizationType.COGNITO,
+        #     authorizer=authorizer
+        # )
 ```
 
 ### 1.2 CDK Aspects (MANDATORY)
@@ -97,7 +123,7 @@ from constructs import IConstruct
 from aws_cdk import aws_s3 as s3
 
 class EnforceEncryption(IAspect):
-    """Enforce encryption on all S3 buckets."""
+    """Enforce KMS encryption on all S3 buckets (enterprise compliance: SOC2, HIPAA, PCI-DSS)."""
 
     def visit(self, node: IConstruct) -> None:
         if isinstance(node, s3.CfnBucket):
@@ -106,7 +132,7 @@ class EnforceEncryption(IAspect):
                     server_side_encryption_configuration=[
                         s3.CfnBucket.ServerSideEncryptionRuleProperty(
                             server_side_encryption_by_default=s3.CfnBucket.ServerSideEncryptionByDefaultProperty(
-                                sse_algorithm='AES256'
+                                sse_algorithm='aws:kms'
                             )
                         )
                     ]
@@ -132,10 +158,15 @@ Before returning generated CDK code, verify:
 - [ ] No hardcoded compute limits (Memory, Timeout).
 - [ ] Variables bind dynamically to `config.json` map.
 - [ ] Cross-region layer ARNs map dynamically using `Stack.of(self).region`.
-- [ ] IAM least privilege (Resource-scoped DB actions).
-- [ ] S3 bucket encryption enforced.
+- [ ] IAM least privilege — exact resource ARNs, no wildcards on table names.
+- [ ] S3 bucket encryption enforced with KMS (`aws:kms`), not AES256.
+- [ ] API Gateway has Cognito authorizer (or Lambda authorizer) — no unauthenticated endpoints.
+- [ ] `data_trace_enabled` is `False` in production (PII exposure risk).
+- [ ] WAF WebACL associated with API Gateway stage.
+- [ ] DynamoDB encryption at rest enabled (KMS).
 - [ ] Python Lambda architectures containing Rust/C dependencies package Linux wheels natively via pip `--platform manylinux2014_x86_64` payload extraction.
-- [ ] Standardized Enterprise tags applied.
+- [ ] Standardized Enterprise tags applied using `self.config["stage"]`, not undefined variables.
+- [ ] `RemovalPolicy.RETAIN` for production resources, `DESTROY` for dev.
 - [ ] Code compiles logically via `aws-cdk synth`.
 
 ## 4. EXECUTION CHECKLIST

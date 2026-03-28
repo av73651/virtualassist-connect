@@ -15,7 +15,7 @@ To prevent drift across lambdas, any cross-cutting code MUST live in `backend/sh
 Do **NOT** copy these into individual lambda `src/` directories.
 
 1. `backend/shared/src/middleware/api_gateway.py` (Contains the `@api_gateway_handler` decorator for centralized JSON error mapping and trace injection).
-2. `backend/shared/src/config/logging_config.py` (Contains standard structlog context builders).
+2. `backend/shared/src/config/logging_config.py` (Contains standard Python `logging` configuration — JSON-formatted, OTel trace_id injected via `extra={}` fields — **do NOT use `structlog`**).
 
 ## Instruction to the Code Generation Skill
 When generating a new endpoint or service, the AI Agent must strictly scope outputs to `backend/lambdas/{resource}/`.
@@ -23,7 +23,7 @@ When generating a new endpoint or service, the AI Agent must strictly scope outp
 1. **Domain & Services**: Generate `src/handlers/{action}_{resource}.py` which imports the shared `@api_gateway_handler`.
 2. **DTOs**: `src/dto/{resource}_request.py` containing Pydantic models.
 3. **Services**: `src/services/{resource}_service.py` containing pure domain logic wrapped in OTel metrics (`tracer.start_as_current_span()`).
-4. **Docs & Plans**: `docs/{resource}-app-design.md`, `docs/{resource}-infra-design.md`, and an isolated `README.md` and `implementation-plan.md` MUST GO INTO `backend/lambdas/{resource}/`.
+4. **Docs & Plans**: `docs/{resource}-app-design.md`, `docs/{resource}-infra-design.md`, and an isolated `README.md` and `implementation-plan.md` MUST GO INTO the top-level `docs/specs/{service-name}/` directory.
 5. **Infrastructure**: `infra/stacks/{resource}_stack.py` should configure the AWS CDK to bundle the Lambda `src` local code along with the `backend/shared/` module into a single deployment payload.
 
 *Humans should only be filling in the pure business algorithms inside the `Service` layer, allowing the Code Generation AI to absorb the operational complexity.*

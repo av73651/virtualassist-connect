@@ -12,7 +12,8 @@ ALL error responses MUST use this exact format:
 {
     "errorCode": "ERROR_TYPE",
     "message": "Human-readable error description",
-    "correlationId": "uuid-from-logger"
+    "correlationId": "uuid-from-logger",
+    "timestamp": "ISO-8601-utc-timestamp"
 }
 ```
 
@@ -118,52 +119,67 @@ ALL error responses MUST use this exact format:
 
 ### Python Handler Implementation
 
+Note: In practice, the `@api_gateway_handler` decorator centralizes error mapping and trace injection. This example shows the underlying error handling logic for reference.
+
 ```python
-from aws_lambda_powertools import Logger
+import logging
+import json
+from opentelemetry import trace
 from src.dto.response import ErrorResponse
 
-logger = Logger()
+logger = logging.getLogger(__name__)
 
-@app.post("/users")
-def create_user():
+def get_trace_id() -> str:
+    """Extract OTel trace ID for use as correlation ID."""
+    span = trace.get_current_span()
+    return format(span.get_span_context().trace_id, '032x')
+
+def create_user(event):
     """Handler for POST /users."""
     try:
-        # Parse and validate request
-        request_data = CreateUserRequest(**app.current_event.json_body)
+        body = json.loads(event.get('body', '{}'))
+        request_data = CreateUserRequest(**body)
 
-        # Call service layer
         service = UserService()
         user = service.create_user(request_data)
 
-        # Success response
-        return UserResponse.from_domain(user).dict(), 201
+        return {
+            "statusCode": 201,
+            "body": json.dumps(UserResponse.from_domain(user).dict())
+        }
 
     except ValueError as e:
-        # Business logic validation error
         logger.error("Validation error", extra={"error": str(e)})
-        return ErrorResponse(
-            errorCode="VALIDATION_ERROR",
-            message=str(e),
-            correlationId=logger.get_correlation_id()
-        ).dict(), 400
+        return {
+            "statusCode": 400,
+            "body": json.dumps(ErrorResponse(
+                errorCode="VALIDATION_ERROR",
+                message=str(e),
+                correlationId=get_trace_id()
+            ).dict())
+        }
 
     except KeyError as e:
-        # Resource not found
         logger.error("Resource not found", extra={"error": str(e)})
-        return ErrorResponse(
-            errorCode="NOT_FOUND",
-            message=f"Resource {str(e)} not found",
-            correlationId=logger.get_correlation_id()
-        ).dict(), 404
+        return {
+            "statusCode": 404,
+            "body": json.dumps(ErrorResponse(
+                errorCode="NOT_FOUND",
+                message=f"Resource {str(e)} not found",
+                correlationId=get_trace_id()
+            ).dict())
+        }
 
     except Exception as e:
-        # Unexpected error
         logger.exception("Unexpected error occurred")
-        return ErrorResponse(
-            errorCode="INTERNAL_ERROR",
-            message="An internal server error occurred",
-            correlationId=logger.get_correlation_id()
-        ).dict(), 500
+        return {
+            "statusCode": 500,
+            "body": json.dumps(ErrorResponse(
+                errorCode="INTERNAL_ERROR",
+                message="An internal server error occurred",
+                correlationId=get_trace_id()
+            ).dict())
+        }
 ```
 
 ### ErrorResponse DTO
@@ -177,13 +193,15 @@ class ErrorResponse(BaseModel):
     errorCode: str
     message: str
     correlationId: str
+    timestamp: str
 
     class Config:
         schema_extra = {
             "example": {
                 "errorCode": "VALIDATION_ERROR",
                 "message": "Email format is invalid",
-                "correlationId": "a3f7c8d1-4b2e-4c9f-b1a2-3d4e5f6g7h8i"
+                "correlationId": "a3f7c8d1-4b2e-4c9f-b1a2-3d4e5f6g7h8i",
+                "timestamp": "2026-03-28T10:00:00.000Z"
             }
         }
 ```
@@ -242,7 +260,7 @@ logger.error(
 return ErrorResponse(
     errorCode="INTERNAL_ERROR",
     message="An internal server error occurred",
-    correlationId=logger.get_correlation_id()  # Link to logs
+    correlationId=get_trace_id()  # Link to logs
 ).dict(), 500
 ```
 
@@ -279,7 +297,7 @@ except ValueError as e:
     return ErrorResponse(
         errorCode="VALIDATION_ERROR",
         message=str(e),
-        correlationId=logger.get_correlation_id()
+        correlationId=get_trace_id()
     ).dict(), 400
 ```
 
@@ -292,17 +310,19 @@ API Gateway also needs CORS headers for errors:
 ```python
 def error_response(status_code: int, error_code: str, message: str) -> dict:
     """Build error response with CORS headers."""
+    # MANDATORY: Use specific allowed origin, NOT wildcard "*" (security standards violation)
+    allowed_origin = os.environ.get("CORS_ALLOWED_ORIGIN", "https://app.example.com")
     return {
         "statusCode": status_code,
         "headers": {
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Origin": allowed_origin,
             "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Correlation-Id"
         },
         "body": json.dumps({
             "errorCode": error_code,
             "message": message,
-            "correlationId": logger.get_correlation_id()
+            "correlationId": get_trace_id()
         })
     }
 ```
@@ -429,7 +449,7 @@ return {"errorMessage": "Server error"}, 500
 return ErrorResponse(
     errorCode="NOT_FOUND",
     message="User not found",
-    correlationId=logger.get_correlation_id()
+    correlationId=get_trace_id()
 ).dict(), 404
 ```
 

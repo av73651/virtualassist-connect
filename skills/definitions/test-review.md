@@ -17,10 +17,10 @@ The test review validates:
 - Integration tests in `backend/lambdas/{function}/tests/integration/`
 - Test fixtures and mocks
 - Test configuration files (pytest.ini, conftest.py)
-- Acceptance criteria from `docs/specs/requirements.md`
+- Acceptance criteria from `docs/specs/lambdas/{name}/{name}-requirements.md`
 - Implementation from current task
 
-**Output**: `docs/reviews/test-review-{task-id}-report.md`
+**Output**: `docs/specs/{service-name}/reviews/test-review-{task-id}-report.md`
 
 ---
 
@@ -476,7 +476,7 @@ def test_create_user():
 
 ### 3.1 Review Report Structure
 
-**File**: `docs/reviews/test-review-{task-id}-report.md`
+**File**: `docs/specs/{service-name}/reviews/test-review-{task-id}-report.md`
 
 ```markdown
 # Test Review Report - {Task ID}
@@ -806,7 +806,7 @@ If REJECTED:
    ```
 
 3. **Load Acceptance Criteria**
-   - Read from `docs/specs/requirements.md`
+   - Read from `docs/specs/lambdas/{name}/{name}-requirements.md`
    - Identify all ACs for current task
 
 4. **Check Coverage**

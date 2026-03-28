@@ -846,7 +846,7 @@ Derive operations documentation from:
 - `/aws/lambda/agent-handler-{environment}` - AI agent logs
 - `/aws/apigateway/virtualassist-connect-api-{environment}` - API Gateway logs
 
-**Log Format**: Structured JSON (via Lambda Powertools)
+**Log Format**: Structured JSON (via OpenTelemetry SDK / ADOT Lambda Layer)
 
 **Log Fields**:
 - `timestamp`: ISO 8601 timestamp

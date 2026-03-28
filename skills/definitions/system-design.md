@@ -76,6 +76,9 @@ Select appropriate architecture pattern based on requirements.
 - Consider operational complexity and cost
 - Support identified workflows and integrations
 
+> [!IMPORTANT]
+> **This project mandates Serverless-First Architecture.** AWS Lambda is the only compute layer. Always select this pattern unless a specific, documented requirement cannot be satisfied by Lambda.
+
 **Document rationale for architecture pattern selection.**
 
 ### 3. System Context Diagram
@@ -145,7 +148,7 @@ Create architecture diagram showing services and their interactions.
 - Show all services/components
 - Show communication patterns (synchronous/asynchronous)
 - Show data stores
-- Indicate protocols (HTTP, gRPC, message queue)
+- Indicate protocols (HTTPS, EventBridge, SQS)
 
 **Example:**
 ```mermaid
@@ -238,42 +241,51 @@ Design data models for each service based on domain entities.
 **Indexes**: Required indexes for query performance
 **Constraints**: Business rules enforced at data level
 
-**Example:**
+**Example (DynamoDB Single-Table Design):**
 ```
 Model: Message
 Service Owner: Message Service
 
-Attributes:
-- message_id: UUID, primary key
-- sender_id: UUID, not null, foreign key to User
-- recipient_id: UUID, not null, foreign key to User
-- session_id: UUID, not null, foreign key to ChatSession
-- content: TEXT, max 5000 chars, not null
-- created_at: TIMESTAMP, not null
-- delivered_at: TIMESTAMP, nullable
-- status: ENUM(pending, delivered, failed), not null
+Table: {service-name}-{environment}
+Partition Key (PK): String
+Sort Key (SK): String
 
-Relationships:
-- Belongs to User (sender)
-- Belongs to User (recipient)
-- Belongs to ChatSession
+Item Types:
+- Message Item:
+  PK: "SESSION#{session_id}"
+  SK: "MSG#{created_at}#{message_id}"
+  Attributes:
+    - message_id: String (UUID)
+    - sender_id: String (UUID)
+    - recipient_id: String (UUID)
+    - content: String (max 5000 chars)
+    - created_at: String (ISO 8601)
+    - delivered_at: String (ISO 8601, optional)
+    - status: String ("pending" | "delivered" | "failed")
+    - GSI1PK: "USER#{recipient_id}"
+    - GSI1SK: "MSG#{delivered_at}"
 
-Indexes:
-- Primary: message_id
-- Index: (session_id, created_at) for session message retrieval
-- Index: (recipient_id, delivered_at) for unread messages
+Access Patterns:
+- Get messages by session (ordered): Query PK = "SESSION#{id}", SK begins_with "MSG#"
+- Get unread messages for user: Query GSI1 PK = "USER#{id}", filter status = "pending"
+- Get message by ID: Query PK = "SESSION#{id}", SK = "MSG#{timestamp}#{id}"
 
-Constraints:
-- sender_id != recipient_id (users cannot message themselves)
-- created_at < delivered_at when status = delivered
+Global Secondary Indexes:
+- GSI1: GSI1PK (HASH), GSI1SK (RANGE) — for recipient-based queries
+
+Business Rule Enforcement:
+- sender_id != recipient_id validated in service layer
+- created_at < delivered_at validated in service layer
 ```
 
 **Data Model Principles:**
-- Normalize to 3NF unless denormalization needed for performance
-- Design for query patterns identified in workflows
-- Enforce business rules via constraints where possible
-- Consider data lifecycle and retention policies
-- Plan for data migration and versioning
+- Single-table design for related entities within a service boundary
+- Design access patterns first, then model data to support them
+- Use composite keys (PK + SK) for hierarchical relationships
+- Use GSIs for alternate access patterns (max 5 per table)
+- Enforce business rules in the service layer (DynamoDB has limited constraint support)
+- Use TTL attributes for data lifecycle and expiration
+- Plan for DynamoDB Streams for event-driven processing
 
 ### 8. Integration Design
 
@@ -284,7 +296,7 @@ Design integrations with external systems and third-party services.
 **Integration ID**: Unique identifier
 **External System**: Name of external system
 **Purpose**: Why integration is needed
-**Protocol**: Communication protocol (REST, gRPC, message queue)
+**Protocol**: Communication protocol (HTTPS REST, EventBridge, SQS)
 **Authentication**: How system authenticates
 **Data Flow**: Direction of data flow (inbound/outbound/bidirectional)
 **Failure Handling**: How failures are handled
@@ -293,16 +305,16 @@ Design integrations with external systems and third-party services.
 **Example:**
 ```
 INT-001: Authentication Service Integration
-External System: OAuth2 Provider (Auth0)
+External System: AWS Cognito User Pool
 Purpose: User authentication and authorization
-Protocol: HTTPS REST API
-Authentication: Client credentials
-Data Flow: Bidirectional (validate tokens, retrieve user info)
+Protocol: HTTPS REST API (OAuth 2.0 / OIDC)
+Authentication: API Gateway Cognito Authorizer (JWT validation at gateway level)
+Data Flow: Inbound (API Gateway validates JWT, injects claims into Lambda event)
 Failure Handling:
-- Cache tokens with TTL
-- Fallback to read-only mode if auth service unavailable
-- Retry with exponential backoff
-Rate Limits: 100 requests/second
+- Cognito is a managed service with built-in HA
+- API Gateway caches authorizer results (configurable TTL)
+- Return 503 if Cognito unreachable
+Rate Limits: Cognito default quotas (adjust via AWS Service Quotas)
 ```
 
 ### 9. Data Flow Design
@@ -403,99 +415,101 @@ API Security:
 
 ### 11. Scalability Design
 
-Design for scalability to meet performance and load requirements.
+Design for scalability to meet performance and load requirements within the serverless architecture.
 
-**Horizontal Scaling**
-- Which services can scale horizontally
-- Load balancing strategy
-- Session management (stateless vs stateful)
+**Lambda Concurrency**
+- Reserved concurrency per function (prevent noisy neighbor)
+- Provisioned concurrency for latency-critical functions
+- Region concurrency limits and account-level planning
 
-**Vertical Scaling**
-- Resource allocation per service
-- When vertical scaling is appropriate
+**API Gateway Throttling**
+- Default throttling and burst limits per stage
+- Usage plans for external consumers
+- Per-method rate limiting
 
 **Caching Strategy**
 - What to cache (frequent reads, expensive queries)
 - Cache invalidation strategy
-- Cache technology (Redis, Memcached)
+- DynamoDB DAX for microsecond read latency
 
 **Database Scaling**
-- Read replicas for read-heavy workloads
-- Sharding strategy for write-heavy workloads
-- Connection pooling
+- DynamoDB on-demand vs provisioned capacity planning
+- Partition key design for even distribution
+- GSI design for alternate access patterns
 
 **Asynchronous Processing**
-- Background jobs and queues
-- Event-driven processing
-- Message broker (RabbitMQ, Kafka)
+- Event-driven processing via EventBridge
+- SQS for buffering and load leveling
+- Lambda event-source mappings with batch size tuning
 
 **Example:**
 ```
-Horizontal Scaling:
-- Message Service: Auto-scale 2-10 instances based on CPU
-- Load balancer: Round-robin with health checks
-- Stateless design: No session affinity required
+Lambda Concurrency:
+- API handlers: Reserved concurrency 100 (prevent account-wide throttle)
+- Background processors: No reserved concurrency (burst as needed)
+- Stateless design: No session affinity required (JWT-based auth at API Gateway)
 
 Caching:
-- User profiles: Redis cache, 5-minute TTL
-- Recent messages: Redis cache, 1-minute TTL
-- Cache invalidation: Write-through on updates
+- User profiles: DynamoDB DAX cache (microsecond reads)
+- Cache invalidation: Implicit via DynamoDB Streams
 
 Database:
-- Primary-replica setup (1 primary, 2 read replicas)
-- Read traffic routed to replicas
-- Connection pool: 20 connections per service instance
+- DynamoDB single-table design with on-demand billing
+- GSI (Global Secondary Index) for alternate access patterns
+- Partition key designed for even distribution across partitions
 
 Async Processing:
-- Notification delivery: RabbitMQ queue
-- Analytics events: Kafka topic
-- Worker processes consume from queues
+- Notification delivery: EventBridge → SQS → Lambda
+- Batch size: 10 messages per Lambda invocation
+- DLQ configured for failed processing (max 3 retries)
 ```
 
 ### 12. Availability & Reliability Design
 
-Design for high availability and reliability to meet SLA requirements.
+Design for high availability and reliability leveraging AWS managed service SLAs.
 
-**Redundancy**
-- Service redundancy (multiple instances)
-- Data redundancy (replication, backups)
-- Geographic redundancy (multi-region)
+**Managed Service Reliability**
+- Lambda: Multi-AZ by default, no instance management required
+- API Gateway: Regionally redundant, managed by AWS
+- DynamoDB: Multi-AZ replication built-in, 99.999% SLA (Global Tables)
+- EventBridge/SQS: Fully managed, built-in redundancy
 
 **Failure Handling**
-- Circuit breaker pattern for service calls
-- Retry logic with exponential backoff
-- Graceful degradation
+- Retry logic with exponential backoff (SDK-level and SQS redrives)
+- Dead-letter queues for failed async processing
+- Graceful degradation (e.g., return cached data if downstream unavailable)
 
-**Health Monitoring**
-- Health check endpoints
-- Service discovery and health checks
-- Automatic instance replacement
+**Observability & Alerting**
+- CloudWatch Alarms on Lambda errors, throttles, duration
+- API Gateway 5xx error rate alarms
+- DynamoDB throttle and consumed capacity alarms
+- X-Ray service map for distributed failure analysis
 
 **Disaster Recovery**
-- Backup strategy and frequency
-- Recovery time objective (RTO)
-- Recovery point objective (RPO)
-- Failover procedures
+- DynamoDB: Point-in-time recovery (PITR) enabled for production
+- DynamoDB Global Tables for multi-region (if required)
+- S3: Cross-region replication for critical buckets
+- CDK: Infrastructure reproducible from code (RTO = redeploy time)
 
 **Example:**
 ```
-Availability: 99.9% (43.2 minutes downtime/month)
+Availability: 99.9% (leveraging AWS managed service SLAs)
 
-Redundancy:
-- Minimum 2 instances per service across 2 availability zones
-- Database: Primary-replica with automatic failover
-- Multi-region: Active-passive setup
+Managed Service Redundancy:
+- Lambda: Multi-AZ execution managed by AWS
+- DynamoDB: Multi-AZ replication with point-in-time recovery
+- API Gateway: Regional deployment with edge caching via CloudFront
 
 Failure Handling:
-- Circuit breaker: Open after 5 consecutive failures
-- Retry: 3 attempts with exponential backoff (1s, 2s, 4s)
-- Graceful degradation: Read-only mode if primary DB fails
+- SQS DLQ: Messages retried 3 times before moving to DLQ
+- SDK retries: boto3 default retry with exponential backoff
+- Graceful degradation: Return cached response if Bedrock unavailable
 
 Disaster Recovery:
-- Automated daily backups retained for 30 days
-- RTO: 4 hours
-- RPO: 1 hour
-- Automated failover to passive region
+- DynamoDB PITR: Restore to any point in last 35 days
+- S3: Versioning enabled, cross-region replication for critical data
+- RTO: 1 hour (CDK redeploy + DynamoDB PITR restore)
+- RPO: 5 minutes (DynamoDB continuous backup)
 ```
 
 ### 13. Technology Stack Selection
@@ -529,8 +543,8 @@ Select specific technologies for each layer of the system.
 - Rationale
 
 **Infrastructure**
-- Cloud provider (AWS, GCP, Azure)
-- Container orchestration (Kubernetes, ECS)
+- Cloud provider (AWS)
+- Compute layer (Serverless Lambda)
 - CI/CD tools
 - Monitoring and logging
 - Rationale
@@ -538,31 +552,27 @@ Select specific technologies for each layer of the system.
 **Example:**
 ```
 Programming Languages:
-- Backend Services: Go
-  Rationale: High performance, excellent concurrency, team expertise
-- Frontend: TypeScript/React
-  Rationale: Type safety, strong ecosystem, team expertise
+- Backend Services: Python 3.12+
+  Rationale: Standardized enterprise stack, strict mypy typing support
 
 Frameworks:
-- Backend: Gin (Go web framework)
-- Testing: Go testing, Testify
-- ORM: GORM
+- Backend: OpenTelemetry (OTel) for Observability, Pydantic for validation
+- Testing: Pytest with coverage boundaries
 
 Data Stores:
-- Primary Database: PostgreSQL 15
-  Rationale: ACID compliance, JSON support, strong query optimizer
-- Cache: Redis 7
-  Rationale: High performance, pub/sub for real-time notifications
-- Message Queue: RabbitMQ
-  Rationale: Reliable message delivery, team expertise
+- Primary Database: DynamoDB
+  Rationale: Serverless scaling, single-table design, low operational overhead
+- Async Bus: AWS EventBridge / SQS
+  Rationale: Completely serverless integration mapping
+- Auth: AWS Cognito
+  Rationale: Native JWT validation at API Gateway
 
 Infrastructure:
 - Cloud: AWS
-- Container Orchestration: EKS (Kubernetes)
-- CI/CD: GitHub Actions, ArgoCD
-- Monitoring: Prometheus, Grafana
-- Logging: ELK Stack (Elasticsearch, Logstash, Kibana)
-- Tracing: Jaeger
+- Compute: Serverless Lambda ONLY (no containers)
+- IaC: AWS CDK v2 (Python)
+- Monitoring: OpenTelemetry SDK (via ADOT Lambda Layer) + AWS X-Ray
+- Logging: Structured JSON logging (Python logging module) into CloudWatch
 ```
 
 ### 14. Deployment Architecture
@@ -570,9 +580,9 @@ Infrastructure:
 Design deployment topology and infrastructure.
 
 **Deployment Model:**
-- Containers (Docker)
-- Orchestration (Kubernetes, ECS)
-- Serverless functions
+- Serverless Functions (AWS Lambda)
+- API Routing (AWS API Gateway)
+- Event Mapping (EventBridge)
 
 **Environment Strategy:**
 - Development, staging, production
@@ -580,7 +590,7 @@ Design deployment topology and infrastructure.
 - Configuration management
 
 **Infrastructure as Code:**
-- Terraform, CloudFormation, Pulumi, AWS CDK
+- AWS CDK v2 (Python)
 - Version control for infrastructure
 - **CDK Rule (MANDATORY)**: NEVER hardcode AWS Account, Region, or computational limits (memory/timeouts) inside Stacks.
 - **CDK Rule (MANDATORY)**: ALWAYS extract parameters into a multi-environment dictionary map (e.g. `infra/config.json`) and inject it into the Stack runtime.
@@ -594,34 +604,33 @@ Design deployment topology and infrastructure.
 
 **Example:**
 ```
-Deployment Model: Containerized microservices on Kubernetes
+Deployment Model: Serverless Lambda Functions bundled locally via CDK.
 
 Environments:
-- Development: Single cluster, minimal resources
-- Staging: Production-like, 50% resources
-- Production: Multi-AZ, full resources
+- Development: Isolated developer AWS accounts testing locally
+- Staging: Integrated stack 50% load threshold
+- Production: Fully shielded Multi-AZ Prod account
 
 Infrastructure as Code:
-- Terraform for cloud resources
-- Helm charts for Kubernetes deployments
-- All IaC in Git repository
+- AWS CDK v2 for all cloud resources
+- All IaC inside docs/specs/{service-name}/{service-name}-infra-design.md logic flow
 
 Deployment Pipeline:
 1. Code commit triggers CI pipeline
-2. Build: Docker image build and push to ECR
-3. Test: Unit tests, integration tests
-4. Deploy to staging: Automated
-5. Smoke tests on staging
+2. Build: CDK Synth bundles Python assets
+3. Test: Pytest unit execution, Mypy type validation
+4. Deploy to staging: Automated CDK Deployment
+5. Smoke tests on API Gateway endpoints via Postman/Curl
 6. Deploy to production: Manual approval required
-7. Health check validation
-8. Rollback: Automatic on health check failure
+7. Health check validation on CloudWatch metrics
+8. Rollback: Automatic CDK reversion on alarm failure
 ```
 
 ---
 
 ## Output Artifacts
 
-System design MUST generate the following two primary artifacts. They must be placed strictly in their respective Lambda domain folder (e.g., `backend/lambdas/{name}/docs/`).
+System design MUST generate the following two primary artifacts. They must be placed in the service domain's documentation folder (e.g., `docs/specs/lambdas/{service-name}/`).
 
 ### 1. {name}-app-design.md
 This artifact must be generated FIRST. It acts as the strict Application specification.
@@ -634,8 +643,8 @@ This artifact must be generated FIRST. It acts as the strict Application specifi
 
 ### 2. {name}-infra-design.md
 This artifact must be generated SECOND, explicitly taking the Application Design as its input.
-- Detailed AWS CDK configuration (Docker Bundling for shared modules, RAM, Timeouts)
-- Reference to `backend/shared/` integrations (Monorepo Bundling Strategy)
+- Detailed AWS CDK configuration (ZIP Asset Bundling for shared modules, RAM, Timeouts)
+- Reference to `backend/shared/` integrations (Monorepo ZIP Bundling Strategy)
 - API Gateway infrastructure definitions and Throttling
 - CloudWatch Alarms / Dashboards to monitor the business metrics from App.
 - IAM Least Privilege mappings for precisely the data stores modeled in Application.

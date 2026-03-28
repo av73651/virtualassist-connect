@@ -421,7 +421,7 @@ table.put_item(
         'SK': 'PROFILE',
         'email': 'user@example.com',
         'name': 'John Doe',
-        'created_at': datetime.utcnow().isoformat()
+        'created_at': datetime.now(timezone.utc).isoformat()  # timezone-aware (datetime.utcnow() is deprecated in Python 3.12)
     }
 )
 ```
@@ -437,7 +437,7 @@ table.update_item(
     },
     ExpressionAttributeValues={
         ':status': 'active',
-        ':timestamp': datetime.utcnow().isoformat()
+        ':timestamp': datetime.now(timezone.utc).isoformat()  # timezone-aware
     }
 )
 ```

@@ -20,6 +20,7 @@ For each epic, create user stories:
 - Each story delivers value
 - Stories are independent when possible
 - Include acceptance criteria
+- Assign MoSCoW priority (Must / Should / Could / Won't)
 
 ### 3. Task Decomposition
 Break each story into technical tasks:
@@ -27,14 +28,13 @@ Break each story into technical tasks:
 **Example Story**: "As a user, I want to authenticate via AWS Cognito"
 
 **Tasks**:
-1. Set up Cognito User Pool in CDK
-2. Create Lambda authorizer function
-3. Integrate API Gateway with authorizer
-4. Implement frontend login component
-5. Add token management service
-6. Write unit tests
-7. Write integration tests
-8. Update documentation
+1. Create shared Cognito User Pool in CDK (`infra/stacks/auth_stack.py`)
+2. Add Cognito authorizer to API Gateway in service stack
+3. Implement frontend login component
+4. Add token management service
+5. Write unit tests (`backend/lambdas/{name}/tests/unit/`)
+6. Write integration tests (`backend/lambdas/{name}/tests/integration/`)
+7. Update documentation (`docs/specs/{service-name}/`)
 
 ### 4. Task Specification
 
@@ -45,8 +45,9 @@ For each task, define:
 - **Acceptance Criteria**: How to verify completion
 - **Dependencies**: Required prior tasks
 - **Estimated Effort**: T-shirt sizing (S, M, L, XL)
-- **Skills Required**: Backend, frontend, infra, AI
+- **Skills Required**: Backend, frontend, infra
 - **Files Affected**: List of files to create/modify
+- **Test Plan Reference**: Link to test cases in `docs/specs/{service-name}/test-plan.md`
 
 ### 5. Dependency Mapping
 - Identify task dependencies
@@ -57,7 +58,7 @@ For each task, define:
 ### 6. Sprint Planning
 - Group tasks into sprints/iterations
 - Balance workload
-- Prioritize by value and dependencies
+- Prioritize by MoSCoW value and dependencies
 - Set sprint goals
 
 ## Task Documentation
@@ -82,7 +83,7 @@ Task template:
 
 ## Dependencies
 - TASK-YYY must be completed first
-- Requires API design spec
+- Requires API design spec from `docs/specs/{service-name}/api-design.md`
 
 ## Effort Estimate
 [S | M | L | XL]
@@ -93,19 +94,29 @@ Task template:
 - Infrastructure (CDK)
 
 ## Files Affected
-- `/backend/lambdas/auth/handler.py` (create)
-- `/infra/stacks/auth_stack.py` (create)
-- `/frontend/src/app/services/auth.service.ts` (create)
+- `backend/lambdas/{name}/src/handlers/handler.py` (create)
+- `infra/stacks/{name}_stack.py` (create)
+- `frontend/src/app/services/auth.service.ts` (create)
 
-## Implementation Notes
-[Any technical considerations, patterns to follow, etc.]
+## Test Coverage
+- Unit tests: `backend/lambdas/{name}/tests/unit/`
+- Integration tests: `backend/lambdas/{name}/tests/integration/`
+- Test plan: `docs/specs/{service-name}/test-plan.md`
+
+## Patterns to Follow
+- `skills/patterns/layer-architecture.md` — Clean Architecture layers
+- `skills/patterns/error-response-format.md` — Error response format
+- `skills/patterns/observability-requirements.md` — OTel instrumentation
 ```
 
-## AI Skills to Use
-- `story-splitter`: Break epics into user stories
-- `task-generator`: Generate technical tasks from stories
-- `dependency-analyzer`: Identify task dependencies
-- `effort-estimator`: Estimate task complexity
+## AI Skills Used
+
+| Skill | File | Purpose |
+|-------|------|---------|
+| Requirements Analysis | `skills/definitions/requirements-analysis.md` | Break epics into stories with acceptance criteria |
+| System Design | `skills/definitions/system-design.md` | Inform task decomposition from design artifacts |
+
+**Note**: No dedicated task-elaboration skill exists. This phase uses requirements-analysis and system-design skills to inform decomposition, plus manual engineering judgment for effort estimation and dependency mapping.
 
 ## Sprint Planning Template
 
@@ -118,29 +129,30 @@ Task template:
 [What we aim to achieve]
 
 ## Tasks
-### High Priority
+### Must (Critical Path)
 - [ ] TASK-XXX: [Task title]
 - [ ] TASK-YYY: [Task title]
 
-### Medium Priority
+### Should (High Value)
 - [ ] TASK-ZZZ: [Task title]
 
-### Low Priority (If time permits)
+### Could (If Time Permits)
 - [ ] TASK-AAA: [Task title]
 
 ## Definition of Done
-- All tests pass
-- Code reviewed
-- Documentation updated
+- All tests pass (unit + integration)
+- Code reviewed via `skills/definitions/code-review.md`
+- Documentation updated in `docs/specs/{service-name}/`
 - Deployed to dev environment
 ```
 
 ## Outputs
-- ✅ Complete backlog of tasks in `tasks/backlog/`
-- ✅ Dependency graph
-- ✅ Sprint plan
-- ✅ Clear acceptance criteria for all tasks
-- ✅ Effort estimates
+- Complete backlog of tasks in `tasks/backlog/`
+- Dependency graph
+- Sprint plan with MoSCoW priorities
+- Clear acceptance criteria for all tasks
+- Effort estimates
+- Test fixtures and data prepared (from shift-left test plan)
 
 ## Next Phase
-→ [Phase 4: Task Execution](04-execution.md)
+-> [Phase 4: Task Execution](04-execution.md)

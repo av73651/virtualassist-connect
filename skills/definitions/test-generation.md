@@ -2,12 +2,14 @@
 
 ## Directive
 
-This skill generates comprehensive, high-quality test suites that validate all requirements and ensure code correctness.
+This skill generates comprehensive, high-quality test suites derived from requirements and acceptance criteria using a **shift-left testing approach**. Tests are designed from requirements BEFORE or alongside code — not after implementation.
 
-**Primary Goal**: Generate tests that are complete, maintainable, and provide confidence in implementation quality.
+**Primary Goal**: Generate tests that are traceable to requirements, complete, maintainable, and provide confidence in implementation quality.
 
 **Non-Negotiables**:
+- Test cases derived from acceptance criteria and requirements (not reverse-engineered from code)
 - All acceptance criteria have corresponding tests
+- Test plan created before or alongside implementation
 - Code coverage ≥ 80%
 - Tests follow Arrange-Act-Assert pattern
 - Tests are independent and deterministic
@@ -15,7 +17,58 @@ This skill generates comprehensive, high-quality test suites that validate all r
 
 ---
 
-## 1. TEST GENERATION SCOPE
+## 1. SHIFT-LEFT TEST STRATEGY
+
+### 1.1 Test Design from Requirements
+
+Tests MUST be derived from requirements artifacts — NOT from implementation code. The primary inputs for test design are:
+
+1. **Acceptance Criteria** (from `requirements.md`) → Unit and integration test cases
+2. **Business Rules** (from `business-rules.md`) → Service layer test cases
+3. **Workflows** (from `workflows.md`) → E2E test scenarios
+4. **External Interfaces** (from `external-interfaces.md`) → Integration test cases
+5. **Technical Requirements** (from `technical-requirements.md`) → Performance/load test criteria
+
+### 1.2 Test Plan Generation
+
+Before writing test code, generate a **test plan** that maps requirements to test cases:
+
+```
+Test Plan: {service-name}
+
+Source: docs/specs/{service-name}/requirements.md
+
+| AC ID   | AC Description              | Test Type   | Test Name                                       | Layer     |
+|---------|------------------------------|-------------|------------------------------------------------|-----------|
+| AC-001  | Create user with valid data  | Unit        | test_create_user_with_valid_data_AC_001        | Service   |
+| AC-001  | Create user with valid data  | Integration | test_create_user_api_returns_201_AC_001        | Handler   |
+| AC-002  | Reject duplicate email       | Unit        | test_create_user_duplicate_email_AC_002        | Service   |
+| AC-003  | Validate email format        | Unit        | test_invalid_email_format_AC_003               | DTO       |
+| BR-001  | Auth required for messages   | Integration | test_unauthenticated_request_returns_401       | Handler   |
+| WF-001  | User registration flow       | E2E         | test_complete_registration_workflow            | E2E       |
+```
+
+**The test plan MUST be generated as the first output artifact**, before any test code.
+
+### 1.3 Test Design Workflow
+
+```
+1. Requirements Analysis complete
+   ↓
+2. Test Plan generated from acceptance criteria, business rules, and workflows
+   ↓
+3. System Design complete
+   ↓
+4. Test fixtures and mocks designed from data models and interfaces
+   ↓
+5. Test code generated (can happen alongside or before implementation)
+   ↓
+6. Implementation code generated (tests already exist to validate)
+   ↓
+7. Tests executed, coverage measured, gaps addressed
+```
+
+### 1.4 Test Scope
 
 Generate tests for:
 - **Unit Tests**: Test individual functions/classes in isolation
@@ -1069,7 +1122,11 @@ markers =
 
 ## 8. ACCEPTANCE CRITERIA TRACEABILITY
 
-### Map Tests to ACs
+### Traceability is Mandatory (Shift-Left)
+
+Every test MUST trace back to a requirement, acceptance criterion, or business rule. Tests that exist without traceability to a requirement indicate either:
+- A missing requirement (update requirements)
+- An unnecessary test (remove it)
 
 **Every acceptance criterion MUST have at least one test**:
 ```
@@ -1083,25 +1140,44 @@ REQ-001: User can create account with email and name
 ```
 
 ### Traceability Matrix
-Create in test review:
-| AC ID | AC Description | Test Name | Coverage |
-|-------|----------------|-----------|----------|
-| AC-001 | Create with valid data | test_create_user_...AC_001 | ✅ |
-| AC-002 | Reject duplicate email | test_create_user_...AC_002 | ✅ |
-| AC-003 | Validate email format | test_create_user_...AC_003 | ✅ |
+
+The traceability matrix MUST be generated as part of the test plan (Section 1.2) and validated during test review:
+
+| Source | ID | Description | Test Type | Test Name | Status |
+|--------|----|-------------|-----------|-----------|--------|
+| AC | AC-001 | Create with valid data | Unit | test_create_user_...AC_001 | ✅ |
+| AC | AC-002 | Reject duplicate email | Unit | test_create_user_...AC_002 | ✅ |
+| AC | AC-003 | Validate email format | Unit | test_create_user_...AC_003 | ✅ |
+| BR | BR-001 | Auth required | Integration | test_unauth_returns_401 | ✅ |
+| TR | TR-001 | Latency < 200ms | Performance | test_api_latency_p95 | ⬜ |
+
+**Gap Analysis**: Any AC, BR, or TR without a corresponding test is a coverage gap that MUST be addressed before test review approval.
 
 ---
 
 ## 9. INTEGRATION WITH WORKFLOW
 
-### Phase 4 (Implementation)
-- Generate tests alongside code
-- Unit tests for each layer
-- Test coverage tracked
+### Phase 2 (Requirements Analysis) → Test Plan
+- Extract acceptance criteria, business rules, and workflows
+- Generate test plan with traceability matrix (Section 1.2)
+- Identify test types needed per requirement (unit, integration, E2E)
+- **Output**: `docs/specs/{service-name}/test-plan.md`
 
-### Phase 5 (Testing)
-- Run all tests
+### Phase 3 (System Design) → Test Fixtures
+- Design test fixtures from data models
+- Design mocks from external interface definitions
+- Identify integration test boundaries from service decomposition
+
+### Phase 4 (Implementation) → Test Code
+- Generate test code from test plan (tests can be written before implementation)
+- Unit tests for each layer (derived from ACs, not from code)
+- Integration tests for service boundaries
+- Test coverage tracked continuously
+
+### Phase 5 (Testing) → Execution & Validation
+- Run all tests against implementation
 - Generate coverage report
+- Validate traceability: every AC has a passing test
 - Run test review
 - Fix failing tests
 - Address coverage gaps
@@ -1137,20 +1213,39 @@ pytest --cov=src --cov-report=term-missing --cov-report=html
 
 ---
 
-## 11. QUALITY EXPECTATIONS
+## 11. OUTPUT ARTIFACTS
 
-Generated tests must:
-- [ ] Follow Arrange-Act-Assert pattern
-- [ ] Be independent (no shared state)
-- [ ] Have descriptive names
-- [ ] Cover happy path and error paths
-- [ ] Include edge cases
-- [ ] Properly mock external dependencies
-- [ ] Reference AC IDs where applicable
-- [ ] Be syntactically correct
-- [ ] Run successfully
-- [ ] Provide ≥80% code coverage
+Test generation MUST produce the following artifacts in `docs/specs/{service-name}/`:
+
+### 1. test-plan.md (Generated FIRST)
+- Traceability matrix: AC/BR/TR → test cases
+- Test types per requirement (unit, integration, E2E)
+- Coverage gap analysis
+
+### 2. Test Code
+- Unit tests: `tests/unit/`
+- Integration tests: `tests/integration/`
+- E2E tests: `tests/e2e/` (when applicable)
+- Shared fixtures: `tests/conftest.py`
 
 ---
 
-**Comprehensive tests are essential for code quality and confidence. This skill ensures all code is thoroughly tested and validated against requirements.**
+## 12. QUALITY EXPECTATIONS
+
+Generated tests must:
+- [ ] Be derived from acceptance criteria and business rules (not reverse-engineered from code)
+- [ ] Have a test plan with traceability matrix generated before test code
+- [ ] Follow Arrange-Act-Assert pattern
+- [ ] Be independent (no shared state)
+- [ ] Have descriptive names with AC/BR IDs where applicable
+- [ ] Cover happy path and error paths
+- [ ] Include edge cases derived from requirements
+- [ ] Properly mock external dependencies
+- [ ] Be syntactically correct
+- [ ] Run successfully
+- [ ] Provide ≥80% code coverage
+- [ ] Have zero untested acceptance criteria
+
+---
+
+**Tests are a first-class artifact derived from requirements — not an afterthought of implementation. This skill ensures all code is validated against the requirements it was built to satisfy.**

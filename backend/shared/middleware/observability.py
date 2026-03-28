@@ -205,18 +205,3 @@ def observe(
         return wrapper
 
     return decorator
-
-
-# Legacy alias for backward compatibility
-def record_business_metrics(metric_base_name: str) -> Callable:
-    """Legacy decorator name - use observe() instead.
-
-    Args:
-        metric_base_name: Metric prefix name
-
-    Returns:
-        Callable: Decorator function
-
-    Deprecated: Use observe() for new code.
-    """
-    return observe(operation=metric_base_name, metric_prefix=metric_base_name)

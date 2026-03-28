@@ -13,15 +13,14 @@ This skill validates system design artifacts against technology standards, archi
 ## 1. REVIEW SCOPE
 
 The design review validates the following artifacts:
-- `docs/specs/requirements.md` (input from Stage 1)
-- `docs/specs/architecture.md`
-- `docs/specs/api-design.md`
-- `docs/specs/data-model.md`
-- `docs/specs/implementation-plan.md`
-- `docs/specs/observability-design.md`
-- `docs/specs/security-design.md`
+- `docs/specs/lambdas/{name}/{name}-requirements.md` (input from Stage 1)
+- `docs/specs/lambdas/{name}/{name}-app-design.md` (Domain design: APIs, DTOs, business logic, data model, OTel boundaries)
+- `docs/specs/lambdas/{name}/{name}-infra-design.md` (CDK design: ZIP bundling, IAM, CloudWatch, cost estimates)
+- `docs/specs/lambdas/{name}/implementation-plan.md`
 
-**Output**: `docs/reviews/design-review-report.md`
+> **Note**: `api-design`, `data-model`, `observability-design`, and `security-design` are no longer separate artifacts. They are consolidated into `{name}-app-design.md` and `{name}-infra-design.md`.
+
+**Output**: `docs/specs/lambdas/{name}/reviews/design-review-report.md`
 
 ---
 
@@ -36,9 +35,10 @@ The design review validates the following artifacts:
 - [ ] **CRITICAL**: Python 3.12 runtime specified
 - [ ] Lambda memory configuration: 512 MB - 1024 MB
 - [ ] Lambda timeout: 30s (API) or 60s (background)
-- [ ] X-Ray tracing enabled in design
+- [ ] X-Ray tracing enabled in design (via ADOT Lambda Layer)
 - [ ] Environment variables used for config (no hardcoded values)
-- [ ] Lambda layers specified for shared dependencies
+- [ ] **CRITICAL**: Shared code bundled via CDK ZIP Asset Bundling from `backend/shared/` — NOT via Lambda Layers
+- [ ] No Lambda Layer ARNs hardcoded for shared application code
 
 **Forbidden Technologies Check**:
 - [ ] ❌ No EC2 instances for application hosting
@@ -348,7 +348,7 @@ The design review validates the following artifacts:
   - [ ] Availability requirements
   - [ ] Compliance requirements
 
-#### API Design Completeness (`docs/specs/api-design.md`)
+#### API Design Completeness (in `{name}-app-design.md`)
 - [ ] **CRITICAL**: All API endpoints defined
 - [ ] For each endpoint:
   - [ ] HTTP method specified (GET, POST, PUT, DELETE)
@@ -362,7 +362,7 @@ The design review validates the following artifacts:
 - [ ] Request/Response examples provided
 - [ ] OpenAPI/Swagger specification ready to generate
 
-#### Data Model Completeness (`docs/specs/data-model.md`)
+#### Data Model Completeness (in `{name}-app-design.md`)
 - [ ] **CRITICAL**: All data entities defined
 - [ ] For each DynamoDB table:
   - [ ] Table name
@@ -380,7 +380,7 @@ The design review validates the following artifacts:
 - [ ] Data relationships defined
 - [ ] Data flow diagrams
 
-#### Implementation Plan Completeness (`docs/specs/implementation-plan.md`)
+#### Implementation Plan Completeness (`docs/specs/lambdas/{name}/implementation-plan.md`)
 - [ ] **CRITICAL**: File-by-file structure for all Lambdas
 - [ ] For each Lambda function:
   - [ ] Function name and purpose
@@ -402,37 +402,43 @@ The design review validates the following artifacts:
 - [ ] Lambda-to-Lambda communication patterns
 - [ ] Event schemas for EventBridge
 
-#### Architecture Completeness (`docs/specs/architecture.md`)
+#### App Design Completeness (`docs/specs/lambdas/{name}/{name}-app-design.md`)
 - [ ] System architecture diagram (high-level)
 - [ ] Component diagram showing all Lambdas
 - [ ] Data flow diagrams
 - [ ] Event flow diagrams
 - [ ] Integration points with external systems
-- [ ] Infrastructure topology
-- [ ] Network architecture (if VPC used)
-- [ ] Deployment architecture (multi-region, DR)
+- [ ] OTel metrics and tracing boundary definitions
 
-#### Observability Design Completeness (`docs/specs/observability-design.md`)
-- [ ] Logging strategy defined
-- [ ] Tracing spans identified
+#### Infra Design Completeness (`docs/specs/lambdas/{name}/{name}-infra-design.md`)
+- [ ] CDK ZIP Asset Bundling from `backend/shared/` confirmed
+- [ ] Infrastructure topology
+- [ ] IAM least-privilege mapping per Lambda
+- [ ] CloudWatch alarms and dashboards
+- [ ] Estimated cost analysis
+- [ ] Deployment architecture (multi-region, DR if applicable)
+
+#### Observability Design Completeness (in `{name}-infra-design.md`)
+- [ ] Structured logging strategy defined (standard Python `logging` formatted as JSON with OTel trace_id)
+- [ ] Tracing spans identified per service method
 - [ ] Metrics catalog:
-  - [ ] Business metrics
-  - [ ] Technical metrics
+  - [ ] Business metrics (OTel counters)
+  - [ ] Technical metrics (latency, errors)
   - [ ] SLI/SLO definitions if applicable
-- [ ] CloudWatch Logs structure
+- [ ] CloudWatch Logs structure and retention defined
 - [ ] CloudWatch dashboard designs
-- [ ] X-Ray tracing strategy
+- [ ] X-Ray tracing strategy via ADOT Layer
 - [ ] Alerting rules defined
 - [ ] Monitoring runbooks outlined
 
-#### Security Design Completeness (`docs/specs/security-design.md`)
-- [ ] Authentication flow designed (Cognito)
-- [ ] Authorization model defined (RBAC, ABAC)
-- [ ] IAM policies for each Lambda
-- [ ] Secrets management strategy
+#### Security Design Completeness (in `{name}-infra-design.md`)
+- [ ] Authentication flow designed (Cognito JWT validated at API Gateway — NOT inside Lambda)
+- [ ] Authorization model defined (RBAC in Lambda service layer)
+- [ ] IAM policies for each Lambda (least privilege, no wildcards)
+- [ ] Secrets management strategy (Secrets Manager, NOT env vars)
 - [ ] Data encryption (at rest and in transit)
-- [ ] Input validation strategy
-- [ ] Security headers (CloudFront)
+- [ ] Input validation strategy (Pydantic at handler boundary)
+- [ ] Security headers (CloudFront if applicable)
 - [ ] CORS configuration
 - [ ] Rate limiting and DDoS protection
 - [ ] Audit logging for security events
@@ -605,7 +611,7 @@ Document all design risks:
 
 ### 3.1 Review Report Structure
 
-**File**: `docs/reviews/design-review-report.md`
+**File**: `docs/specs/{service-name}/reviews/design-review-report.md`
 
 ```markdown
 # Design Review Report
@@ -871,7 +877,7 @@ Items intentionally deferred or accepted as technical debt:
 
 1. **[DEBT-001]** Caching layer not included in v1
    - **Rationale**: Premature optimization, add if performance issues
-   - **Plan**: Monitor latency, add ElastiCache if p99 > 500ms
+   - **Plan**: Monitor latency, add DynamoDB DAX if p99 > 500ms (ElastiCache is forbidden per technology-standards.md)
 
 ---
 
@@ -926,8 +932,10 @@ If REJECTED:
 ### 4.1 Review Execution Steps
 
 1. **Load Design Artifacts**
-   - Read all files in `docs/specs/`
-   - Read requirements from Stage 1
+   - Read `docs/specs/lambdas/{name}/{name}-requirements.md` (Stage 1 output)
+   - Read `docs/specs/lambdas/{name}/{name}-app-design.md`
+   - Read `docs/specs/lambdas/{name}/{name}-infra-design.md`
+   - Read `docs/specs/lambdas/{name}/implementation-plan.md`
 
 2. **Validate Technology Standards**
    - Load `definitions/technology-standards.md`
@@ -961,7 +969,7 @@ If REJECTED:
    - Identify risks
 
 7. **Generate Report**
-   - Create `docs/reviews/design-review-report.md`
+   - Create `docs/specs/lambdas/{name}/reviews/design-review-report.md`
    - Categorize issues by severity
    - Provide actionable recommendations
    - Calculate scores

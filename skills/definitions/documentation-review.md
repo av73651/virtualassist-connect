@@ -14,13 +14,13 @@ This skill validates documentation accuracy, completeness, and usability before 
 
 The documentation review validates:
 - API documentation (`docs/api/`)
-- Architecture documentation (`docs/specs/architecture.md`)
+- Architecture documentation (`docs/specs/lambdas/{name}/{name}-app-design.md`)
 - Deployment guides (`docs/deployment/`)
 - Operations runbooks (`docs/operations/`)
 - Setup guides (`docs/setup/`)
 - Code documentation (docstrings, comments)
 
-**Output**: `docs/reviews/documentation-review-report.md`
+**Output**: `docs/specs/{service-name}/reviews/documentation-review-report.md`
 
 ---
 
@@ -425,7 +425,7 @@ Identify any gaps:
 
 ### 3.1 Review Report Structure
 
-**File**: `docs/reviews/documentation-review-report.md`
+**File**: `docs/specs/{service-name}/reviews/documentation-review-report.md`
 
 ```markdown
 # Documentation Review Report

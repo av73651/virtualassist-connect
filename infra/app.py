@@ -7,6 +7,7 @@ This module is the entry point for the AWS CDK application.
 import os
 import json
 from aws_cdk import App, Environment
+from stacks.auth_stack import AuthStack
 from stacks.hello_world_stack import HelloWorldStack
 from stacks.calculator_stack import CalculatorStack
 
@@ -27,12 +28,22 @@ if not config:
 # Build target AWS Environment credentials
 aws_env = Environment(account=config["account"], region=config["region"])
 
+# Shared Authentication Stack (must be created first)
+auth_stack = AuthStack(
+    app,
+    f"AuthStack-{target_env}",
+    env=aws_env,
+    config=config,
+    description=f"Shared Authentication Stack ({target_env})"
+)
+
 # Hello World API Stack
 HelloWorldStack(
     app,
     f"HelloWorldStack-{target_env}",
     env=aws_env,
     config=config,
+    user_pool=auth_stack.user_pool,
     description=f"Hello World API Stack ({target_env})"
 )
 
@@ -42,6 +53,7 @@ CalculatorStack(
     f"CalculatorStack-{target_env}",
     env=aws_env,
     config=config,
+    user_pool=auth_stack.user_pool,
     description=f"Calculator API Stack ({target_env})"
 )
 

@@ -90,7 +90,7 @@ def lambda_handler(event, context):
     current_span = trace.get_current_span()
     trace_id = format(current_span.get_span_context().trace_id, '032x')
     
-    logger.info(f'{{"message": "Request received", "trace_id": "{trace_id}"}}')
+    logger.info("Request received", extra={"trace_id": trace_id})
     # Implementation
     pass
 ```
@@ -131,7 +131,7 @@ api = apigw.RestApi(
     deploy_options=apigw.StageOptions(
         stage_name=environment,
         logging_level=apigw.MethodLoggingLevel.INFO,
-        data_trace_enabled=True,
+        data_trace_enabled=(environment != 'prod'),  # Never log full payloads in production (PII risk)
         metrics_enabled=True,
         tracing_enabled=True
     ),
@@ -756,25 +756,40 @@ ALL Lambda functions MUST include:
    })
    ```
 
-2. **Distributed Tracing**:
+2. **Distributed Tracing** (via ADOT Lambda Layer + OpenTelemetry SDK):
    ```python
-   @tracer.capture_lambda_handler
+   from opentelemetry import trace
+
+   tracer = trace.get_tracer(__name__)
+
    def lambda_handler(event, context):
-       # Automatically traced
-       pass
+       # ADOT layer creates the root span automatically
+       with tracer.start_as_current_span("process_request"):
+           # Business logic traced
+           pass
    ```
 
-3. **Metrics**:
+3. **Metrics** (OpenTelemetry SDK):
    ```python
-   metrics.add_metric(name="UserCreated", unit=MetricUnit.Count, value=1)
+   from opentelemetry import metrics
+
+   meter = metrics.get_meter("VirtualAssist")
+   user_created_counter = meter.create_counter("UserCreated")
+
+   # In business logic
+   user_created_counter.add(1, {"service": "user-api"})
    ```
 
-4. **Correlation ID Propagation**:
+4. **Correlation ID Propagation** (via OpenTelemetry trace context):
    ```python
-   @logger.inject_lambda_context(correlation_id_path=correlation_paths.API_GATEWAY_REST)
+   from opentelemetry import trace
+
    def lambda_handler(event, context):
-       correlation_id = logger.get_correlation_id()
-       # Use in downstream calls
+       # ADOT propagates trace context automatically; extract trace_id for logging
+       span = trace.get_current_span()
+       trace_id = format(span.get_span_context().trace_id, '032x')
+       logger.info("Processing request", extra={"trace_id": trace_id})
+       # trace_id serves as the correlation ID across all services
    ```
 
 ### 5.2 CloudWatch Integration
@@ -866,7 +881,7 @@ alarm = cloudwatch.Alarm(
 **MUST generate code compatible with platform stack**:
 - Python 3.12 for backend
 - AWS Lambda handler structure
-- Lambda Powertools for observability
+- OpenTelemetry SDK (via ADOT Lambda Layer) for observability
 - DynamoDB data access via boto3
 - API Gateway integration
 - Bedrock Claude integration for AI capabilities
@@ -879,7 +894,7 @@ alarm = cloudwatch.Alarm(
 **Check**:
 - ✅ Lambda functions used (not EC2, containers)
 - ✅ DynamoDB used for data (not unsupported databases)
-- ✅ OpenTelemetry/Lambda Powertools present
+- ✅ OpenTelemetry instrumentation present (via ADOT)
 - ✅ AWS SDK usage aligned with patterns
 - ✅ Cognito for authentication
 - ✅ Secrets Manager for secrets
@@ -1047,7 +1062,7 @@ User → API Gateway → Lambda Authorizer (Cognito)
                    → SQS (background tasks)
 
 All Lambda functions:
-- Lambda Powertools (observability)
+- OpenTelemetry SDK (via ADOT Lambda Layer)
 - X-Ray tracing
 - CloudWatch logs/metrics
 ```

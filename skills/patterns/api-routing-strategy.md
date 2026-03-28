@@ -1,7 +1,7 @@
 # API Routing Strategy: The Micro-Lambda Pattern
 
 ## Purpose
-By migrating from Lambda Powertools to standard OpenTelemetry, we removed the proprietary `APIGatewayRestResolver`. AWS Lambda natively has **no routing capabilities**. 
+AWS Lambda natively has **no routing capabilities**. The platform uses OpenTelemetry (via ADOT) for observability — not proprietary routing frameworks.
 
 To prevent developers from building brittle string-matching routers inside Lambdas, we strictly enforce the **Micro-Lambda Pattern**.
 

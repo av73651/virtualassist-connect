@@ -98,12 +98,11 @@ from opentelemetry import trace, metrics
 from src.dto.request import CreateUserRequest
 from src.dto.response import UserResponse, ErrorResponse
 from src.services.user_service import UserService
-from src.middleware.auth import require_auth
+from shared.middleware.auth import require_auth
+from shared.middleware.api_gateway import api_gateway_handler
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
-
-from src.middleware.api_gateway import api_gateway_handler
 
 @require_auth
 @api_gateway_handler
@@ -226,7 +225,7 @@ from typing import Optional
 import logging
 from boto3.dynamodb.conditions import Key
 from src.domain.user import User
-from src.config.aws_clients import get_dynamodb_table
+from shared.config.aws_clients import get_dynamodb_table
 from opentelemetry import trace
 
 logger = logging.getLogger(__name__)
@@ -453,7 +452,7 @@ ALL errors MUST return standardized format:
 
 ```python
 # Config management
-from src.config.secrets import get_secret
+from shared.config.secrets import get_secret
 
 # CORRECT
 api_key = get_secret("anthropic/api_key")

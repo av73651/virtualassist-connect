@@ -22,7 +22,7 @@ This skill performs comprehensive enterprise-grade code reviews that MUST enforc
 
 ### 1.1 Backend Structure Validation
 
-**REQUIRED Structure**:
+**REQUIRED Structure per Lambda** (`backend/lambdas/{api_name}/`):
 ```
 src/
   handlers/       # HTTP/event handlers ONLY
@@ -30,9 +30,23 @@ src/
   repositories/   # Data access ONLY
   domain/         # Business entities
   dto/            # Request/response schemas
-  middleware/     # Cross-cutting concerns
-  utils/          # Pure utility functions
-  config/         # Configuration management
+```
+
+**Shared code** (`backend/shared/`) — NOT duplicated per Lambda:
+```
+shared/
+  middleware/     # Cross-cutting concerns (@api_gateway_handler, @observe, @require_auth)
+  config/         # Configuration management (logging_config, aws_clients, secrets)
+```
+
+**Import Rule**: Middleware, config, and utilities MUST be imported from `shared`, not from `src`:
+```python
+# ✅ CORRECT
+from shared.middleware.api_gateway import api_gateway_handler
+from shared.config.secrets import get_secret
+
+# ❌ WRONG — do not duplicate shared code per Lambda
+from src.middleware.api_gateway import api_gateway_handler
 ```
 
 ### 1.2 Layer Responsibility Violations
@@ -194,7 +208,6 @@ Recommendation: Initialize OTel tracer/meter and extract trace_id for logger con
 **Correct Pattern**:
 ```python
 import logging
-import json
 from opentelemetry import trace, metrics
 
 logger = logging.getLogger(__name__)
@@ -203,7 +216,7 @@ tracer = trace.get_tracer(__name__)
 def lambda_handler(event, context):
     span = trace.get_current_span()
     trace_id = format(span.get_span_context().trace_id, '032x')
-    logger.info(json.dumps({"message": "Processing", "trace_id": trace_id}))
+    logger.info("Processing request", extra={"trace_id": trace_id})
     # Implementation
 ```
 
@@ -234,7 +247,7 @@ Issue Type: Aspect Duplication
 Severity: Medium
 File: src/services/user_service.py:20-35
 Description: Logging logic duplicated across methods. Cross-cutting concerns should be implemented via decorators.
-Recommendation: Remove manual logging. Use @logger.inject_lambda_context at handler level. Use logger.info() for business events only.
+Recommendation: Remove manual logging. Use @api_gateway_handler decorator at handler level for centralized logging. Use logger.info() with extra={} for business events only.
 ```
 
 ### 2.4 Missing Authentication
@@ -420,7 +433,7 @@ Recommendation: Use AWS Secrets Manager or SSM Parameter Store. Access via boto3
 
 **Correct Pattern**:
 ```python
-from src.config.secrets import get_secret
+from shared.config.secrets import get_secret
 
 api_key = get_secret("virtualassist/anthropic-api-key")
 ```
@@ -915,7 +928,7 @@ Issue Type: Code Complexity
 Severity: Medium
 File: src/utils/cache.py:15-65
 Description: Complex caching implementation added without demonstrated need. Premature optimization.
-Recommendation: Start with simple dict cache or use AWS ElastiCache. Add complexity only if performance testing shows need.
+Recommendation: Start with simple dict cache or use DynamoDB DAX. Add complexity only if performance testing shows need.
 ```
 
 ### 8.3 Unused Code
@@ -1120,7 +1133,7 @@ Issue Type: Performance Issue
 Severity: Medium
 File: src/services/config_service.py:35-37
 Description: Configuration data fetched from database on every request. Config rarely changes but is frequently accessed.
-Recommendation: Add caching layer (ElastiCache or in-memory cache with TTL) for configuration data.
+Recommendation: Add caching layer (DynamoDB DAX or in-memory cache within Lambda warm container) for configuration data.
 ```
 
 ### 10.3 Inefficient Loops

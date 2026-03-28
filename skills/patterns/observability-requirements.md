@@ -30,23 +30,21 @@ logger.setLevel(logging.INFO)
 
 **Usage**:
 ```python
-def log_event(message, event_data=None, level=logging.INFO):
-    span = trace.get_current_span()
-    trace_id = format(span.get_span_context().trace_id, '032x') if span else "none"
-    
-    payload = {
-        "message": message,
-        "trace_id": trace_id,
-        **(event_data or {})
-    }
-    
-    if level == logging.ERROR:
-        logger.error(json.dumps(payload))
-    else:
-        logger.info(json.dumps(payload))
+# Use extra={} for structured fields — NOT json.dumps()
+span = trace.get_current_span()
+trace_id = format(span.get_span_context().trace_id, '032x') if span else "none"
 
-# Example
-log_event("User created successfully", {"user_id": "user-123", "action": "user_creation"})
+logger.info("User created successfully", extra={
+    "trace_id": trace_id,
+    "user_id": "user-123",
+    "action": "user_creation"
+})
+
+logger.error("Operation failed", extra={
+    "trace_id": trace_id,
+    "error": str(e),
+    "action": "user_creation"
+})
 ```
 
 ### Log Levels
@@ -62,7 +60,7 @@ Never log passwords, Social Security Numbers, or credit card info.
 
 ### Required: OpenTelemetry Metrics
 
-ALL services MUST emit custom metrics via the OTel SDK API. This replaces CloudWatch EMF or Powertools Metrics interfaces directly in the code. ADOT exports them to CloudWatch.
+ALL services MUST emit custom metrics via the OTel SDK API. ADOT exports them to CloudWatch.
 
 **Configuration**:
 ```python

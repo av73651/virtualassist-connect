@@ -24,7 +24,7 @@ The integration review validates:
 
 **Environment**: Dev or Staging environment (NOT production)
 
-**Output**: `docs/reviews/integration-review-report.md`
+**Output**: `docs/specs/{service-name}/reviews/integration-review-report.md`
 
 ---
 
@@ -466,7 +466,7 @@ Test error handling:
 
 ### 3.1 Review Report Structure
 
-**File**: `docs/reviews/integration-review-report.md`
+**File**: `docs/specs/{service-name}/reviews/integration-review-report.md`
 
 ```markdown
 # Integration Review Report

@@ -10,67 +10,72 @@ Deploy application to AWS environments safely and reliably with rollback capabil
 - **Deployment**: Automatic on merge to `develop` branch
 - **Access**: Development team
 - **Data**: Synthetic/test data
+- **Config**: `infra/config.json` -> `dev` section
 
-### 2. Staging (staging)
-- **Purpose**: Pre-production testing and validation
-- **Deployment**: Manual trigger from `main` branch
-- **Access**: QA team and stakeholders
-- **Data**: Anonymized production-like data
-
-### 3. Production (prod)
+### 2. Production (prod)
 - **Purpose**: Live application serving users
 - **Deployment**: Manual approval required
 - **Access**: End users
 - **Data**: Real production data
-- **Backup**: Automated, tested recovery
+- **Backup**: DynamoDB PITR enabled, automated recovery
+- **Config**: `infra/config.json` -> `prod` section
 
 ## Deployment Process
 
 ### 1. Pre-Deployment Checklist
 - [ ] All tests passing (unit, integration, E2E)
-- [ ] Code review approved
-- [ ] Documentation updated
+- [ ] Code review approved (`skills/definitions/code-review.md`)
+- [ ] Test review approved (`skills/definitions/test-review.md`)
+- [ ] Documentation updated (`docs/specs/{service-name}/`)
 - [ ] Security scan clean
 - [ ] Performance tests passed
-- [ ] Database migrations tested
 - [ ] Rollback plan ready
-- [ ] Monitoring alerts configured
+- [ ] CloudWatch alarms configured in CDK stack
 
 ### 2. Infrastructure Deployment (CDK)
 
 ```bash
-# Set environment
-export ENVIRONMENT=dev  # or staging, prod
-
-# Verify changes
+# Set environment context
 cd infra
-cdk diff
 
-# Deploy infrastructure
-cdk deploy --all --require-approval never
+# Verify changes before deploying
+cdk diff -c env=dev
+
+# Deploy all stacks (AuthStack first, then service stacks)
+cdk deploy --all -c env=dev
 
 # Verify deployment
 aws cloudformation describe-stacks \
-  --stack-name VirtualAssistConnectApi-${ENVIRONMENT}
+  --stack-name AuthStack-dev
+aws cloudformation describe-stacks \
+  --stack-name HelloWorldStack-dev
+aws cloudformation describe-stacks \
+  --stack-name CalculatorStack-dev
 ```
+
+**CDK Stack Deployment Order:**
+1. `AuthStack` — Shared Cognito User Pool (must deploy first)
+2. Service stacks (`HelloWorldStack`, `CalculatorStack`) — depend on AuthStack outputs
 
 ### 3. Backend Deployment
 
 Lambda functions are deployed via CDK:
-- Code packaged automatically
-- Layers updated if dependencies changed
-- API Gateway updated
-- Environment variables configured
+- Code packaged from `backend/lambdas/{name}/package/`
+- Shared layer from `backend/lambda-layer/`
+- ADOT Lambda Layer for OpenTelemetry (auto-instrumentation)
+- API Gateway updated with Cognito authorizer
+- WAF WebACL attached to API Gateway stage
+- Environment variables configured (OTel, CORS, log level)
 
 **Deployment Steps:**
 ```bash
-# Package Lambda code
-cd backend
-pip install -r requirements.txt -t ./package
+# Package Lambda code (if not using CDK asset bundling)
+cd backend/lambdas/hello-world
+pip install -r requirements.txt -t ./package/
 
-# CDK handles deployment
-cd ../infra
-cdk deploy ApiStack
+# CDK handles the rest
+cd ../../../infra
+cdk deploy HelloWorldStack-dev -c env=dev
 ```
 
 ### 4. Frontend Deployment
@@ -90,19 +95,23 @@ aws cloudfront create-invalidation \
   --paths "/*"
 ```
 
-### 5. Database Migrations
+### 5. Post-Deploy Verification
 
-If using DynamoDB or RDS:
 ```bash
-# Backup first
-aws dynamodb create-backup --table-name users-prod \
-  --backup-name users-backup-$(date +%Y%m%d)
+# Verify Lambda function is healthy
+aws lambda invoke \
+  --function-name hello-world-api-dev \
+  --payload '{}' response.json
 
-# Run migration scripts
-python scripts/migrate_db.py --environment prod
+# Verify API Gateway endpoint
+curl -H "Authorization: Bearer ${TOKEN}" \
+  https://xxx.execute-api.region.amazonaws.com/dev/hello
 
-# Verify migration
-python scripts/verify_migration.py
+# Check CloudWatch for OTel metrics
+aws cloudwatch get-metric-data \
+  --metric-data-queries '[{"Id":"m1","MetricStat":{"Metric":{"Namespace":"VirtualAssist","MetricName":"hello_message_total"},"Period":300,"Stat":"Sum"}}]' \
+  --start-time $(date -u -v-5M +%Y-%m-%dT%H:%M:%S) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%S)
 ```
 
 ## Deployment Strategies
@@ -112,20 +121,13 @@ python scripts/verify_migration.py
 1. Deploy new version (Green) alongside current (Blue)
 2. Run smoke tests on Green
 3. Gradually shift traffic to Green (10%, 50%, 100%)
-4. Monitor metrics and errors
+4. Monitor CloudWatch metrics and OTel traces
 5. Keep Blue running for quick rollback
 
 **Implementation:**
 - Use Lambda aliases and weighted routing
 - CloudFront distribution points to new S3 version
 - API Gateway canary deployments
-
-### Rolling Deployment
-
-- Deploy to small percentage of instances
-- Monitor health
-- Gradually increase percentage
-- Complete deployment
 
 ### Canary Deployment
 
@@ -147,56 +149,56 @@ stage = apigw.Stage(self, 'prod',
 
 ## Deployment Automation
 
-### CI/CD Pipeline (GitHub Actions Example)
+### CI/CD Pipeline
 
-**Location**: `.github/workflows/deploy.yml`
-
-```yaml
-# Pipeline stages:
-# 1. Build and Test
-# 2. Deploy to Dev (automatic)
-# 3. Deploy to Staging (manual approval)
-# 4. Deploy to Production (manual approval with additional checks)
-```
+See `skills/patterns/ci-cd-enforcement.md` for pipeline standards.
 
 **Pipeline Steps:**
 1. Code checkout
-2. Run linting
-3. Run unit tests
+2. Run linting (flake8, ng lint)
+3. Run unit tests (`backend/lambdas/{name}/tests/unit/`)
 4. Build application
-5. Run integration tests
+5. Run integration tests (`backend/lambdas/{name}/tests/integration/`)
 6. Security scan
-7. Deploy infrastructure
-8. Deploy application
+7. CDK diff (review infrastructure changes)
+8. CDK deploy (AuthStack first, then service stacks)
 9. Run smoke tests
 10. Health check validation
+11. Verify OTel metrics flowing to CloudWatch
 
 ## Monitoring Post-Deployment
 
 ### 1. Health Checks
-- API endpoint availability
-- Lambda function errors
-- Database connectivity
-- External service integration
+- API endpoint availability (all endpoints behind Cognito auth)
+- Lambda function errors (CloudWatch Alarms)
+- DynamoDB table health
+- WAF blocked request rate
 
 ### 2. Key Metrics to Monitor
-```
-- API Gateway: Request count, latency, 4xx/5xx errors
-- Lambda: Invocations, duration, errors, throttles
-- CloudFront: Cache hit ratio, requests, bandwidth
-- Application: User actions, feature usage
-```
 
-### 3. Alerts Configuration
-- Error rate threshold exceeded
-- Response time degradation
-- High Lambda concurrent executions
-- Cost anomalies
+**AWS Native Metrics:**
+- API Gateway: Request count, latency, 4xx/5xx errors
+- Lambda: Invocations, duration, errors, throttles, cold starts
+- CloudFront: Cache hit ratio, requests, bandwidth
+
+**Custom OTel Metrics (VirtualAssist namespace):**
+- `{service}_total` — Operation count by status (success/error)
+- `{service}_duration` — Operation latency (p50, p95, p99)
+- Error rate % — Computed metric on CloudWatch dashboard
+
+### 3. Alerts Configuration (CDK-Defined)
+- High error rate alarm (>10 errors in 2 evaluation periods)
+- High latency alarm (p99 > 500ms in 2 evaluation periods)
+- Lambda throttle alarm
+- WAF blocked request spike
 
 ### 4. Dashboards
-- CloudWatch dashboard for infrastructure metrics
-- Application dashboard for business metrics
-- Cost dashboard for spend tracking
+Each service stack creates a CloudWatch dashboard with:
+- Lambda invocations, errors, duration (p50/p95/p99)
+- API Gateway requests and latency
+- Custom OTel success/error counters
+- OTel latency histograms (p50/p95/p99)
+- Error rate % (computed)
 
 ## Rollback Procedures
 
@@ -211,8 +213,8 @@ stage = apigw.Stage(self, 'prod',
 ```bash
 # Revert to previous version
 aws lambda update-alias \
-  --function-name api-handler \
-  --name prod \
+  --function-name hello-world-api-dev \
+  --name live \
   --function-version $PREVIOUS_VERSION
 ```
 
@@ -230,108 +232,93 @@ aws cloudfront create-invalidation \
 
 **Infrastructure:**
 ```bash
-# Rollback CDK stack
+# Rollback CDK stack to previous commit
 cd infra
 git checkout <previous-commit>
-cdk deploy --all
+cdk deploy --all -c env=dev
 ```
 
 ## Post-Deployment Validation
 
 ### Smoke Tests
-- [ ] Homepage loads
-- [ ] User can login
-- [ ] AI assistant responds
-- [ ] API endpoints accessible
-- [ ] Database queries working
+- [ ] API endpoints accessible (with valid Cognito token)
+- [ ] Correct response format (JSON with expected fields)
+- [ ] Error responses follow standard format (`ErrorResponse` DTO)
+- [ ] CORS headers present
+- [ ] OTel traces visible in X-Ray
+- [ ] Custom metrics flowing to CloudWatch VirtualAssist namespace
 
 ### Verification Script
 ```bash
 #!/bin/bash
 # smoke-test.sh
-
 API_URL=$1
+TOKEN=$2
 
 echo "Running smoke tests..."
 
-# Test health endpoint
-curl -f ${API_URL}/health || exit 1
+# Test hello endpoint
+curl -sf -H "Authorization: Bearer ${TOKEN}" \
+  ${API_URL}/hello || exit 1
+echo "  /hello OK"
 
-# Test API endpoint
-curl -f ${API_URL}/api/test || exit 1
+# Test calculator endpoint
+curl -sf -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"num1":2,"num2":3,"operation":"add"}' \
+  ${API_URL}/calculate || exit 1
+echo "  /calculate OK"
 
-# Test authentication
-# Add more tests...
-
-echo "✅ All smoke tests passed"
+echo "All smoke tests passed"
 ```
 
-## Deployment Documentation
+## AI Skills Used
 
-### Release Notes Template
-```markdown
-# Release v1.2.3 - 2026-03-27
+| Skill | File | Purpose |
+|-------|------|---------|
+| Documentation Generation | `skills/definitions/documentation-generation.md` | Generate release notes and deployment docs |
+| Documentation Review | `skills/definitions/documentation-review.md` | Review deployment documentation |
+| Integration Review | `skills/definitions/integration-review.md` | Validate cross-service integration |
 
-## New Features
-- Feature 1 description
-- Feature 2 description
-
-## Bug Fixes
-- Fix 1 description
-
-## Infrastructure Changes
-- Updated Lambda runtime to Python 3.12
-- Added CloudWatch alarms
-
-## Migration Steps
-1. Step 1
-2. Step 2
-
-## Rollback Instructions
-If issues occur, follow: [rollback procedure]
-
-## Known Issues
-- Issue 1 (workaround: ...)
-```
-
-## AI Skills to Use
-
-- `deployment-validator`: Verify deployment readiness
-- `smoke-test-generator`: Generate smoke tests
-- `release-notes-generator`: Create release documentation
-- `rollback-planner`: Generate rollback procedures
+## Patterns Referenced
+- `skills/patterns/ci-cd-enforcement.md` — CI/CD pipeline standards
+- `skills/patterns/observability-requirements.md` — Post-deployment monitoring standards
+- `skills/patterns/opentelemetry-template.md` — OTel verification
 
 ## Deployment Checklist
 
 ### Pre-Deployment
 - [ ] Code merged to appropriate branch
-- [ ] All tests passing
+- [ ] All tests passing (unit + integration)
+- [ ] Traceability matrix validated (no gaps)
 - [ ] Stakeholders notified
 - [ ] Deployment window scheduled
 - [ ] Rollback plan ready
 
 ### During Deployment
-- [ ] Deploy infrastructure (CDK)
-- [ ] Deploy backend (Lambda)
-- [ ] Deploy frontend (S3/CloudFront)
+- [ ] Deploy AuthStack (if changed)
+- [ ] Deploy service stacks (CDK)
+- [ ] Verify Lambda functions healthy
 - [ ] Run smoke tests
-- [ ] Verify metrics
+- [ ] Verify CloudWatch metrics
 
 ### Post-Deployment
 - [ ] All smoke tests passed
-- [ ] Monitoring shows healthy metrics
+- [ ] CloudWatch dashboard shows healthy metrics
+- [ ] OTel traces visible in X-Ray
 - [ ] No critical errors in logs
+- [ ] WAF not blocking legitimate requests
 - [ ] Stakeholders notified of completion
 - [ ] Release notes published
 - [ ] Team debriefing scheduled
 
 ## Outputs
-- ✅ Application deployed to target environment
-- ✅ All services healthy and operational
-- ✅ Monitoring and alerts active
-- ✅ Documentation updated
-- ✅ Release notes published
-- ✅ Team notified
+- Application deployed to target environment
+- All services healthy and operational
+- Monitoring and alerts active (CloudWatch + OTel)
+- Documentation updated
+- Release notes published
+- Team notified
 
 ## Continuous Improvement
 - Review deployment process

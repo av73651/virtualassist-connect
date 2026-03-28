@@ -27,8 +27,8 @@ At each gate, AI must:
 ### After Stage 1 (Requirements Analysis)
 
 **AI Completes**:
-- `docs/specs/requirements.md` created
-- `docs/reviews/requirements-review-report.md` generated
+- `docs/specs/lambdas/{name}/{name}-requirements.md` created
+- `docs/specs/lambdas/{name}/reviews/requirements-review-report.md` generated
 
 **AI Must Present**:
 ```
@@ -41,7 +41,7 @@ Critical Issues: X
 Major Issues: X
 Minor Issues: X
 
-Report Location: docs/reviews/requirements-review-report.md
+Report Location: docs/specs/lambdas/{name}/reviews/requirements-review-report.md
 
 🛑 WAITING FOR APPROVAL 🛑
 
@@ -61,17 +61,16 @@ Please review the report and respond:
 ### After Stage 2 (System Design)
 
 **AI Completes**:
-- `docs/specs/design.md` created (service-specific design)
-- `docs/specs/implementation-plan.md` created
-- `docs/specs/api-design.md` created (if applicable)
-- `docs/specs/data-model.md` created (if applicable)
-- `docs/reviews/design-review-report.md` generated
+- `docs/specs/lambdas/{name}/{name}-app-design.md` created (Domain Design)
+- `docs/specs/lambdas/{name}/implementation-plan.md` created
+- `docs/specs/lambdas/{name}/{name}-infra-design.md` created (CDK & Infra Design)
+- `docs/specs/lambdas/{name}/reviews/design-review-report.md` generated
 
 **IMPORTANT - Architecture vs Design**:
 - **Platform Architecture** (skills/): Defined ONCE for all services - approved technologies, patterns, standards
-- **Service Design** (docs/specs/design.md): Created PER SERVICE - specific endpoints, functions, DTOs, data flows
+- **Service Design** (docs/specs/lambdas/{name}/*): Created PER SERVICE - specific endpoints, functions, DTOs, data flows
 - Design Review validates that service design complies with platform architecture
-- NEVER create `architecture.md` at service level - use `design.md` instead
+- NEVER create `architecture.md` at service level - use `{name}-app-design.md` instead
 
 **AI Must Present**:
 ```
@@ -89,16 +88,16 @@ Critical Issues: X
 Major Issues: X
 Minor Issues: X
 
-Report Location: docs/reviews/design-review-report.md
+Report Location: docs/specs/lambdas/{name}/reviews/design-review-report.md
 
 ⚠️ This is the MOST CRITICAL gate - design defines the entire implementation ⚠️
 
 🛑 WAITING FOR APPROVAL 🛑
 
 Please review:
-1. Service design (docs/specs/design.md)
-2. Implementation plan (docs/specs/implementation-plan.md)
-3. Design review report (docs/reviews/design-review-report.md)
+1. Service design (docs/specs/lambdas/{name}/{name}-app-design.md and {name}-infra-design.md)
+2. Implementation plan (docs/specs/lambdas/{name}/implementation-plan.md)
+3. Design review report (docs/specs/lambdas/{name}/reviews/design-review-report.md)
 
 Respond:
 - "approved" to proceed to Stage 3 (Task Breakdown)
@@ -178,8 +177,8 @@ Major Issues: X
 Minor Issues: X
 
 Report Locations:
-- docs/reviews/code-review-TASK-XXX-report.md
-- docs/reviews/test-review-TASK-XXX-report.md
+- docs/specs/lambdas/{name}/reviews/code-review-TASK-XXX-report.md
+- docs/specs/lambdas/{name}/reviews/test-review-TASK-XXX-report.md
 
 🛑 WAITING FOR APPROVAL 🛑
 
@@ -213,7 +212,7 @@ Respond:
 - All tasks implemented
 - System deployed to dev/staging
 - Integration tests executed
-- `docs/reviews/integration-review-report.md` generated
+- `docs/specs/lambdas/{name}/reviews/integration-review-report.md` generated
 
 **AI Must Present**:
 ```
@@ -236,7 +235,7 @@ Major Issues: X
 Environment: [dev/staging]
 API Endpoint: [URL]
 
-Report Location: docs/reviews/integration-review-report.md
+Report Location: docs/specs/lambdas/{name}/reviews/integration-review-report.md
 
 🛑 WAITING FOR APPROVAL 🛑
 
@@ -265,7 +264,7 @@ Respond:
 - API documentation generated
 - Deployment guide generated
 - Operations runbooks generated
-- `docs/reviews/documentation-review-report.md` generated
+- `docs/specs/lambdas/{name}/reviews/documentation-review-report.md` generated
 
 **AI Must Present**:
 ```
@@ -286,7 +285,7 @@ Documentation Locations:
 - docs/deployment/
 - docs/operations/
 
-Report Location: docs/reviews/documentation-review-report.md
+Report Location: docs/specs/lambdas/{name}/reviews/documentation-review-report.md
 
 🛑 WAITING FOR APPROVAL 🛑
 
@@ -393,13 +392,13 @@ For the current Hello World project, we are at:
 **Current Status**: Stage 2 Design Review
 
 **What AI has completed**:
-- ✅ Stage 1: Requirements (docs/specs/requirements.md)
-- ✅ Requirements Review (docs/reviews/requirements-review-report.md) - APPROVED
-- ✅ Stage 2: Design (docs/specs/design.md, implementation-plan.md)
+- ✅ Stage 1: Requirements (docs/specs/lambdas/hello-world/hello-world-requirements.md)
+- ✅ Requirements Review (docs/specs/lambdas/hello-world/reviews/requirements-review-report.md) - APPROVED
+- ✅ Stage 2: Design (docs/specs/lambdas/hello-world/hello-world-app-design.md, docs/specs/lambdas/hello-world/hello-world-infra-design.md, implementation-plan.md)
 - ⏳ Design Review (in progress - needs to be generated)
 
 **What AI MUST do now**:
-1. Generate docs/reviews/design-review-report.md
+1. Generate docs/specs/lambdas/hello-world/reviews/design-review-report.md
 2. Present the report
 3. 🛑 STOP and WAIT for approval
 4. Fix any issues if needed

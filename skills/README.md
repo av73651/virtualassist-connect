@@ -239,7 +239,7 @@ Documentation (reflects standard architecture)
 **Code Generation** must:
 - Generate Lambda handlers (not EC2, containers)
 - Use DynamoDB for data (not unapproved databases)
-- Include Lambda Powertools instrumentation
+- Include OpenTelemetry instrumentation (via ADOT Lambda Layer)
 - Use Bedrock for AI capabilities
 - Generate CDK for infrastructure
 

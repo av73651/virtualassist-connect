@@ -12,7 +12,10 @@
             "stage_name": "dev",
             "throttling_rate_limit": 500,
             "throttling_burst_limit": 1000
-        }
+        },
+        "cors_allowed_origins": ["http://localhost:4200"],
+        "log_retention_days": 7,
+        "trace_sampling": "always_on"
     },
     "prod": {
         "account": "320644769527",
@@ -27,6 +30,9 @@
             "stage_name": "prod",
             "throttling_rate_limit": 2000,
             "throttling_burst_limit": 5000
-        }
+        },
+        "cors_allowed_origins": ["https://app.virtualassist.example.com"],
+        "log_retention_days": 30,
+        "trace_sampling": "parentbased_traceidratio"
     }
 }

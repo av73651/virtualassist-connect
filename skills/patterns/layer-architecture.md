@@ -16,17 +16,21 @@ Request → Handler → Service → Repository → Database
 
 ## Directory Structure (MANDATORY)
 
+**Per Lambda** (`backend/lambdas/{function_name}/`):
 ```
-backend/lambdas/{function_name}/
-  src/
-    handlers/       # HTTP/event handlers ONLY
-    services/       # Business logic ONLY
-    repositories/   # Data access ONLY
-    domain/         # Business entities
-    dto/            # Request/response schemas
-    middleware/     # Cross-cutting concerns
-    utils/          # Pure utility functions
-    config/         # Configuration management
+src/
+  handlers/       # HTTP/event handlers ONLY
+  services/       # Business logic ONLY
+  repositories/   # Data access ONLY
+  domain/         # Business entities
+  dto/            # Request/response schemas
+```
+
+**Shared code** (`backend/shared/`) — NOT duplicated per Lambda:
+```
+shared/
+  middleware/     # Cross-cutting concerns (@api_gateway_handler, @observe, @require_auth)
+  config/         # Configuration management (logging_config, aws_clients, secrets)
 ```
 
 ---
@@ -51,48 +55,42 @@ backend/lambdas/{function_name}/
 
 **Template**:
 ```python
-from aws_lambda_powertools import Logger, Tracer, Metrics
-from aws_lambda_powertools.event_handler import APIGatewayRestResolver
+import logging
+import json
+from opentelemetry import trace, metrics
 from src.dto.request import CreateUserRequest
 from src.dto.response import UserResponse, ErrorResponse
 from src.services.user_service import UserService
-from src.middleware.auth import require_auth
+from shared.middleware.auth import require_auth
+from shared.middleware.api_gateway import api_gateway_handler
 
-logger = Logger()
-tracer = Tracer()
-metrics = Metrics()
-app = APIGatewayRestResolver()
+logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
-@app.post("/users")
 @require_auth
-@tracer.capture_method
-def create_user():
-    """Handler for POST /users - creates a new user."""
-    try:
-        # 1. Parse and validate request
-        request_data = CreateUserRequest(**app.current_event.json_body)
+@api_gateway_handler
+def lambda_handler(event, context, trace_id):
+    """Lambda entry point. Trace extraction, error mapping, and logging are handled by decorator."""
+    path = event.get('resource')
+    method = event.get('httpMethod')
 
-        # 2. Call service layer
-        service = UserService()
-        user = service.create_user(request_data)
+    if path == '/users' and method == 'POST':
+        return create_user(event)
 
-        # 3. Return response
-        return UserResponse.from_domain(user).dict(), 201
+    raise ValueError(f"Route not found: {method} {path}")
 
-    except ValueError as e:
-        logger.error("Validation error", error=str(e))
-        return ErrorResponse(
-            errorCode="VALIDATION_ERROR",
-            message=str(e),
-            correlationId=logger.get_correlation_id()
-        ).dict(), 400
+def create_user(event):
+    """Handler for POST /users."""
+    body = json.loads(event.get('body', '{}'))
+    request_data = CreateUserRequest(**body)
 
-@logger.inject_lambda_context(correlation_id_path=correlation_paths.API_GATEWAY_REST)
-@tracer.capture_lambda_handler
-@metrics.log_metrics(capture_cold_start_metric=True)
-def lambda_handler(event, context):
-    """Lambda entry point."""
-    return app.resolve(event, context)
+    service = UserService()
+    user = service.create_user(request_data)
+
+    return {
+        "statusCode": 201,
+        "body": json.dumps(UserResponse.from_domain(user).dict())
+    }
 ```
 
 ---
@@ -115,12 +113,15 @@ def lambda_handler(event, context):
 **Template**:
 ```python
 from typing import Optional
+import logging
+from opentelemetry import trace, metrics
 from src.domain.user import User
 from src.repositories.user_repository import UserRepository
 from src.dto.request import CreateUserRequest
-from aws_lambda_powertools import Logger
 
-logger = Logger(child=True)
+logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
+meter = metrics.get_meter(__name__)
 
 class UserService:
     """User business logic service."""
@@ -182,12 +183,14 @@ class UserService:
 **Template**:
 ```python
 from typing import Optional
+import logging
 from boto3.dynamodb.conditions import Key
 from src.domain.user import User
-from src.config.aws_clients import get_dynamodb_table
-from aws_lambda_powertools import Logger
+from shared.config.aws_clients import get_dynamodb_table
+from opentelemetry import trace
 
-logger = Logger(child=True)
+logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 class UserRepository:
     """User data access repository."""
@@ -247,7 +250,7 @@ class UserRepository:
 **Template**:
 ```python
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 @dataclass
@@ -258,7 +261,7 @@ class User:
     name: str
     role: str
     id: str = field(default_factory=lambda: str(uuid4()))
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_active: bool = True
 
     def deactivate(self) -> None:
@@ -362,31 +365,27 @@ class ErrorResponse(BaseModel):
 ```python
 from functools import wraps
 from typing import Callable
-from aws_lambda_powertools import Logger
+import logging
 
-logger = Logger(child=True)
+logger = logging.getLogger(__name__)
 
 def require_auth(func: Callable) -> Callable:
     """Decorator for authentication enforcement."""
 
     @wraps(func)
-    def wrapper(*args, **kwargs):
-        from aws_lambda_powertools.event_handler import current_event
-
-        auth_header = current_event.get_header_value("Authorization")
+    def wrapper(event, context, *args, **kwargs):
+        headers = event.get('headers', {})
+        auth_header = headers.get('Authorization') or headers.get('authorization')
         if not auth_header:
             return {
                 "statusCode": 401,
-                "body": {
-                    "errorCode": "UNAUTHORIZED",
-                    "message": "Missing authorization"
-                }
+                "body": {"errorCode": "UNAUTHORIZED", "message": "Missing authorization"}
             }
 
-        # Validate token (simplified - use Cognito in production)
-        # token_valid = validate_jwt(auth_header)
+        # API Gateway Cognito authorizer handles JWT validation
+        # Lambda only performs authorization (permission checks)
 
-        return func(*args, **kwargs)
+        return func(event, context, *args, **kwargs)
 
     return wrapper
 ```

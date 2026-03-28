@@ -10,6 +10,8 @@ from aws_cdk import (
     aws_logs as logs,
     aws_iam as iam,
     aws_cloudwatch as cloudwatch,
+    aws_cognito as cognito,
+    aws_wafv2 as wafv2,
     Duration,
     CfnOutput,
     RemovalPolicy
@@ -17,29 +19,51 @@ from aws_cdk import (
 from constructs import Construct
 
 
+# Map config log_retention_days to CDK enum
+_LOG_RETENTION_MAP = {
+    7: logs.RetentionDays.ONE_WEEK,
+    30: logs.RetentionDays.ONE_MONTH,
+    90: logs.RetentionDays.THREE_MONTHS,
+    365: logs.RetentionDays.ONE_YEAR
+}
+
+
 class CalculatorStack(Stack):
     """CDK stack for Calculator API.
 
-    Creates Lambda function, API Gateway, CloudWatch dashboard, and alarms.
+    Creates Lambda function, API Gateway with Cognito auth, WAF,
+    CloudWatch dashboard, and alarms.
     """
 
-    def __init__(self, scope: Construct, construct_id: str, config: dict, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        config: dict,
+        user_pool: cognito.IUserPool,
+        **kwargs
+    ) -> None:
         """Initialize Calculator stack.
 
         Args:
             scope: CDK app or stage
             construct_id: Unique identifier for this stack
             config: Configuration dictionary loaded from config.json
+            user_pool: Shared Cognito User Pool from AuthStack
             **kwargs: Additional stack properties
         """
         super().__init__(scope, construct_id, **kwargs)
         self.config = config
+        self.user_pool = user_pool
 
         # Lambda Function
         self.calculator_lambda = self._create_lambda_function()
 
         # API Gateway
         self.api = self._create_api_gateway()
+
+        # WAF
+        self._create_waf()
 
         # CloudWatch Dashboard
         self._create_dashboard()
@@ -80,7 +104,16 @@ class CalculatorStack(Stack):
         )
 
         # ADOT Lambda Layer ARN (Python)
-        adot_layer_arn = self.config.get("adot_layer_arn", f"arn:aws:lambda:{Stack.of(self).region}:901920570463:layer:aws-otel-python-amd64-ver-1-20-0:1")
+        adot_layer_arn = self.config.get(
+            "adot_layer_arn",
+            f"arn:aws:lambda:{Stack.of(self).region}:901920570463:layer:aws-otel-python-amd64-ver-1-20-0:1"
+        )
+
+        stage = self.config["api_gateway"]["stage_name"]
+        log_retention = _LOG_RETENTION_MAP.get(
+            self.config.get("log_retention_days", 7),
+            logs.RetentionDays.ONE_WEEK
+        )
 
         # Lambda Function (ZIP Package)
         calculator_lambda = lambda_.Function(
@@ -88,57 +121,68 @@ class CalculatorStack(Stack):
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="src.handlers.calculator_handler.lambda_handler",
             code=lambda_.Code.from_asset("../backend/lambdas/calculator/package"),
-            function_name=f"calculator-api-{self.config['api_gateway']['stage_name']}",
+            function_name=f"calculator-api-{stage}",
             description="Calculator API Lambda function with mathematical operations",
             memory_size=self.config["lambda"]["memory_size"],
             timeout=Duration.seconds(self.config["lambda"]["timeout_seconds"]),
             role=lambda_role,
             tracing=lambda_.Tracing.ACTIVE,
             layers=[
-                shared_layer,  # Shared code layer (MUST be first for Python path)
+                shared_layer,
                 lambda_.LayerVersion.from_layer_version_arn(
                     self, "ADOTLayer", adot_layer_arn
                 )
             ],
             environment={
-                "POWERTOOLS_SERVICE_NAME": "calculator-api",
                 "LOG_LEVEL": self.config["lambda"]["log_level"],
+                # ADOT auto-instrumentation (MANDATORY)
+                "AWS_LAMBDA_EXEC_WRAPPER": "/opt/otel-instrument",
                 # OpenTelemetry configuration
                 "OTEL_SERVICE_NAME": "calculator-api",
-                "OTEL_TRACES_SAMPLER": "always_on",
+                "OTEL_TRACES_SAMPLER": self.config.get("trace_sampling", "always_on"),
                 "OTEL_METRICS_EXPORTER": "otlp",
                 "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
-                # Metrics export to CloudWatch via ADOT
-                "OTEL_RESOURCE_ATTRIBUTES": "service.name=calculator-api,service.namespace=calculator"
+                "OTEL_PROPAGATORS": "tracecontext,baggage,xray",
+                "OTEL_RESOURCE_ATTRIBUTES": "service.name=calculator-api,service.namespace=VirtualAssist"
             },
-            log_retention=logs.RetentionDays.ONE_WEEK
+            log_retention=log_retention
         )
 
         return calculator_lambda
 
     def _create_api_gateway(self) -> apigw.RestApi:
-        """Create API Gateway with /calculator/add endpoint.
+        """Create API Gateway with Cognito auth and /calculator/add endpoint.
 
         Returns:
             apigw.RestApi: The created REST API
         """
+        stage = self.config["api_gateway"]["stage_name"]
+
+        # Cognito Authorizer
+        authorizer = apigw.CognitoUserPoolsAuthorizer(
+            self, "CognitoAuthorizer",
+            cognito_user_pools=[self.user_pool],
+            authorizer_name=f"calculator-authorizer-{stage}"
+        )
+
         # REST API
         api = apigw.RestApi(
             self, "CalculatorApi",
-            rest_api_name=f"calculator-api-{self.config['api_gateway']['stage_name']}",
+            rest_api_name=f"calculator-api-{stage}",
             description="Calculator REST API",
             deploy_options=apigw.StageOptions(
-                stage_name=self.config["api_gateway"]["stage_name"],
+                stage_name=stage,
                 throttling_rate_limit=self.config["api_gateway"]["throttling_rate_limit"],
                 throttling_burst_limit=self.config["api_gateway"]["throttling_burst_limit"],
                 logging_level=apigw.MethodLoggingLevel.INFO,
-                data_trace_enabled=True,
-                metrics_enabled=True
+                data_trace_enabled=(stage != "prod"),
+                metrics_enabled=True,
+                tracing_enabled=True
             ),
             default_cors_preflight_options=apigw.CorsOptions(
-                allow_origins=apigw.Cors.ALL_ORIGINS,
+                allow_origins=self.config.get("cors_allowed_origins", ["http://localhost:4200"]),
                 allow_methods=["POST", "OPTIONS"],
-                allow_headers=["Content-Type", "X-Amz-Date", "Authorization"]
+                allow_headers=["Content-Type", "X-Amz-Date", "Authorization", "X-Correlation-Id"]
             )
         )
 
@@ -148,7 +192,7 @@ class CalculatorStack(Stack):
         # /calculator/add resource
         add_resource = calculator_resource.add_resource("add")
 
-        # POST /calculator/add integration
+        # POST /calculator/add integration with Cognito auth
         add_integration = apigw.LambdaIntegration(
             self.calculator_lambda,
             proxy=True,
@@ -162,6 +206,8 @@ class CalculatorStack(Stack):
         add_resource.add_method(
             "POST",
             add_integration,
+            authorizer=authorizer,
+            authorization_type=apigw.AuthorizationType.COGNITO,
             method_responses=[
                 apigw.MethodResponse(status_code="200"),
                 apigw.MethodResponse(status_code="400"),
@@ -170,6 +216,62 @@ class CalculatorStack(Stack):
         )
 
         return api
+
+    def _create_waf(self) -> None:
+        """Create WAF WebACL with AWS managed rules and rate limiting."""
+        stage = self.config["api_gateway"]["stage_name"]
+
+        web_acl = wafv2.CfnWebACL(
+            self, "WebACL",
+            default_action=wafv2.CfnWebACL.DefaultActionProperty(allow={}),
+            scope="REGIONAL",
+            visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
+                cloud_watch_metrics_enabled=True,
+                metric_name=f"calculator-waf-{stage}",
+                sampled_requests_enabled=True
+            ),
+            rules=[
+                wafv2.CfnWebACL.RuleProperty(
+                    name="AWSManagedRulesCommonRuleSet",
+                    priority=1,
+                    statement=wafv2.CfnWebACL.StatementProperty(
+                        managed_rule_group_statement=wafv2.CfnWebACL.ManagedRuleGroupStatementProperty(
+                            vendor_name="AWS",
+                            name="AWSManagedRulesCommonRuleSet"
+                        )
+                    ),
+                    override_action=wafv2.CfnWebACL.OverrideActionProperty(none={}),
+                    visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
+                        cloud_watch_metrics_enabled=True,
+                        metric_name="AWSManagedRulesCommonRuleSet",
+                        sampled_requests_enabled=True
+                    )
+                ),
+                wafv2.CfnWebACL.RuleProperty(
+                    name="RateLimitRule",
+                    priority=2,
+                    statement=wafv2.CfnWebACL.StatementProperty(
+                        rate_based_statement=wafv2.CfnWebACL.RateBasedStatementProperty(
+                            limit=2000,
+                            aggregate_key_type="IP"
+                        )
+                    ),
+                    action=wafv2.CfnWebACL.RuleActionProperty(block={}),
+                    visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
+                        cloud_watch_metrics_enabled=True,
+                        metric_name="RateLimitRule",
+                        sampled_requests_enabled=True
+                    )
+                )
+            ]
+        )
+
+        # Associate WAF with API Gateway stage
+        wafv2.CfnWebACLAssociation(
+            self, "WebACLAssociation",
+            resource_arn=self.api.deployment_stage.stage_arn,
+            web_acl_arn=web_acl.attr_arn
+        )
 
     def _create_dashboard(self) -> None:
         """Create CloudWatch dashboard for observability."""
@@ -235,22 +337,23 @@ class CalculatorStack(Stack):
         )
 
         # Custom OpenTelemetry metrics (exported via ADOT)
+        otel_namespace = "VirtualAssist"
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="Calculator Operations (Success vs Error)",
                 left=[
                     cloudwatch.Metric(
-                        namespace="calculator-api",
+                        namespace=otel_namespace,
                         metric_name="calculator_add_total",
-                        dimensions_map={"status": "success"},
+                        dimensions_map={"service.name": "calculator-api", "status": "success"},
                         statistic="Sum",
                         label="Success",
                         color="#2ca02c"
                     ),
                     cloudwatch.Metric(
-                        namespace="calculator-api",
+                        namespace=otel_namespace,
                         metric_name="calculator_add_total",
-                        dimensions_map={"status": "error"},
+                        dimensions_map={"service.name": "calculator-api", "status": "error"},
                         statistic="Sum",
                         label="Error",
                         color="#d62728"
@@ -262,22 +365,25 @@ class CalculatorStack(Stack):
                 title="Calculator Operation Latency (p50, p95, p99)",
                 left=[
                     cloudwatch.Metric(
-                        namespace="calculator-api",
-                        metric_name="calculator_add_duration_seconds",
+                        namespace=otel_namespace,
+                        metric_name="calculator_add_duration",
+                        dimensions_map={"service.name": "calculator-api"},
                         statistic="p50",
                         label="p50",
                         color="#1f77b4"
                     ),
                     cloudwatch.Metric(
-                        namespace="calculator-api",
-                        metric_name="calculator_add_duration_seconds",
+                        namespace=otel_namespace,
+                        metric_name="calculator_add_duration",
+                        dimensions_map={"service.name": "calculator-api"},
                         statistic="p95",
                         label="p95",
                         color="#ff7f0e"
                     ),
                     cloudwatch.Metric(
-                        namespace="calculator-api",
-                        metric_name="calculator_add_duration_seconds",
+                        namespace=otel_namespace,
+                        metric_name="calculator_add_duration",
+                        dimensions_map={"service.name": "calculator-api"},
                         statistic="p99",
                         label="p99",
                         color="#d62728"
@@ -297,14 +403,15 @@ class CalculatorStack(Stack):
                         label="Error Rate %",
                         using_metrics={
                             "errors": cloudwatch.Metric(
-                                namespace="calculator-api",
+                                namespace=otel_namespace,
                                 metric_name="calculator_add_total",
-                                dimensions_map={"status": "error"},
+                                dimensions_map={"service.name": "calculator-api", "status": "error"},
                                 statistic="Sum"
                             ),
                             "total": cloudwatch.Metric(
-                                namespace="calculator-api",
+                                namespace=otel_namespace,
                                 metric_name="calculator_add_total",
+                                dimensions_map={"service.name": "calculator-api"},
                                 statistic="Sum"
                             )
                         },
@@ -315,7 +422,7 @@ class CalculatorStack(Stack):
             )
         )
 
-        # Request/Response size distribution
+        # API Gateway error distribution
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="API Gateway 4XX Errors",
