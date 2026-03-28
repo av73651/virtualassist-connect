@@ -1,0 +1,32 @@
+{
+    "dev": {
+        "account": "320644769527",
+        "region": "us-west-2",
+        "adot_layer_arn": "arn:aws:lambda:us-west-2:901920570463:layer:aws-otel-python-amd64-ver-1-20-0:1",
+        "lambda": {
+            "memory_size": 512,
+            "timeout_seconds": 30,
+            "log_level": "INFO"
+        },
+        "api_gateway": {
+            "stage_name": "dev",
+            "throttling_rate_limit": 500,
+            "throttling_burst_limit": 1000
+        }
+    },
+    "prod": {
+        "account": "320644769527",
+        "region": "us-west-2",
+        "adot_layer_arn": "arn:aws:lambda:us-west-2:901920570463:layer:aws-otel-python-amd64-ver-1-20-0:1",
+        "lambda": {
+            "memory_size": 1024,
+            "timeout_seconds": 60,
+            "log_level": "WARNING"
+        },
+        "api_gateway": {
+            "stage_name": "prod",
+            "throttling_rate_limit": 2000,
+            "throttling_burst_limit": 5000
+        }
+    }
+}

@@ -1,0 +1,8 @@
+{
+  "HelloWorldStack": {
+    "LambdaFunctionArn": "arn:aws:lambda:us-west-2:320644769527:function:hello-world-api",
+    "ApiEndpoint": "https://djdewfulx1.execute-api.us-west-2.amazonaws.com/dev/",
+    "LambdaFunctionName": "hello-world-api",
+    "HelloWorldApiEndpointAD496187": "https://djdewfulx1.execute-api.us-west-2.amazonaws.com/dev/"
+  }
+}

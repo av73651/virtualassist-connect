@@ -1,0 +1,458 @@
+# Requirements Analysis Skill
+
+## Purpose
+Produce structured, design-ready requirement artifacts that clearly capture user needs, functional behavior, technical constraints, and traceability. Requirements must be clear, actionable, and suitable as inputs for system architecture and design.
+
+## Requirements Principles
+
+Requirements capture both business intent and technical expectations.
+
+Analysis focuses on:
+- Understanding user needs
+- Defining functional capabilities
+- Documenting technical requirements
+- Capturing business rules
+- Maintaining traceability across development stages
+
+**Requirements must avoid implementation-level architecture assumptions.**
+
+---
+
+## Analysis Process
+
+### 1. Persona Identification
+
+Identify personas interacting with the system.
+
+For each persona document:
+- **Role**: What role they play
+- **Goals**: What they want to achieve
+- **Key Needs**: What problems they need solved
+
+**Examples:**
+- End User
+- Administrator
+- System Operator
+- External System
+
+### 2. User Needs
+
+For each persona, identify the key problems or needs the system must address.
+
+**Format:**
+```
+Persona: [Persona Name]
+Need: [Clear statement of need]
+```
+
+**Example:**
+```
+Persona: End User
+Need: Send and receive chat messages in real time.
+```
+
+### 3. Functional Requirements
+
+Define the functional capabilities the system must provide.
+
+Each requirement must include:
+
+- **Requirement ID**: Unique identifier (e.g., FR-001)
+- **Description**: Clear statement of what the system must do
+- **Persona Supported**: Which persona(s) this serves
+- **Priority**: Must / Should / Nice-to-have
+- **Acceptance Criteria**: Conditions that define when the requirement is satisfied
+
+**Functional requirements describe what the system must do.**
+
+**Example:**
+```
+FR-001
+Description: System must allow authenticated users to send text messages.
+Persona: End User
+Priority: Must
+Acceptance Criteria:
+- User can compose message up to 5000 characters
+- Message is delivered within 3 seconds
+- User receives confirmation of delivery
+```
+
+### 4. Technical Requirements
+
+Identify technical expectations and constraints necessary to support functionality.
+
+Categories include:
+- Performance expectations
+- Scalability requirements
+- Security requirements
+- Availability expectations
+- Deployment constraints
+- Technology stack constraints
+
+**Technical requirements must be measurable where possible.**
+
+**Examples:**
+```
+TR-001: API latency < 200 ms at p95
+TR-002: System availability 99.9%
+TR-003: Support 10,000 concurrent users
+TR-004: Data encrypted at rest and in transit
+```
+
+### 5. Business Rules
+
+Extract explicit business rules that govern system behavior.
+
+Each rule must include:
+- **Rule ID**: Unique identifier (e.g., BR-001)
+- **Description**: Clear statement of the rule
+- **Conditions**: When the rule applies
+- **Expected Outcome**: What should happen
+
+**Examples:**
+```
+BR-001
+Description: Users must be authenticated before sending messages.
+Conditions: User attempts to send message
+Expected Outcome: System validates authentication token; rejects if invalid
+
+BR-002
+Description: Only administrators can delete chat sessions.
+Conditions: User attempts to delete chat session
+Expected Outcome: System checks role; allows if admin, denies otherwise
+```
+
+### 6. Domain Model Extraction
+
+Identify key domain entities implied by the requirements.
+
+For each entity provide:
+- **Entity Name**
+- **Description**: Brief explanation of what it represents
+- **Key Attributes**: Main properties (conceptual, not database schema)
+
+**Examples:**
+```
+User
+Description: Person who uses the system to send and receive messages
+Key Attributes: identity, authentication status, role
+
+ChatSession
+Description: Conversation context containing messages between users
+Key Attributes: participants, creation time, status
+
+Message
+Description: Text communication sent by a user
+Key Attributes: content, sender, timestamp, delivery status
+```
+
+### 7. Actor Identification
+
+Identify all actors interacting with the system, including:
+- Human users (different roles)
+- External systems
+- Third-party services
+- Monitoring systems
+
+**Format:**
+```
+Actor: [Name]
+Type: [Human / External System / Service]
+Interaction: [Brief description of how they interact]
+```
+
+### 8. Workflow Identification
+
+Extract major workflows from the requirements.
+
+**Format:**
+```
+Workflow: [Name]
+Steps:
+1. [Action]
+2. [Action]
+3. [Action]
+```
+
+**Example:**
+```
+Workflow: User Sends Message
+Steps:
+1. User composes message
+2. User submits message
+3. System validates user authentication
+4. System validates message content
+5. System stores message
+6. System delivers message to recipients
+7. System confirms delivery to sender
+```
+
+### 9. Process Flow Diagrams
+
+Generate process flow diagrams representing business workflows.
+
+**Requirements:**
+- Use Mermaid syntax
+- Represent business process flow, not system architecture
+- Show decision points and alternative paths
+- Keep at business logic level
+
+**Example:**
+```mermaid
+flowchart TD
+    A[User Composes Message] --> B{User Authenticated?}
+    B -->|No| C[Show Login]
+    B -->|Yes| D[Validate Message]
+    D --> E{Valid Content?}
+    E -->|No| F[Show Error]
+    E -->|Yes| G[Store Message]
+    G --> H[Deliver to Recipients]
+    H --> I[Confirm Delivery]
+```
+
+### 10. Data Flow Diagrams
+
+Generate logical data flow diagrams showing movement of data between actors and system components.
+
+**Requirements:**
+- Remain conceptual and derived only from requirements
+- Do not infer infrastructure components or microservices
+- Show data inputs, transformations, and outputs
+- Use Mermaid syntax
+
+**Example:**
+```mermaid
+graph LR
+    A[User] -->|Message Content| B[Message Validation]
+    B -->|Validated Message| C[Message Storage]
+    C -->|Stored Message| D[Delivery Service]
+    D -->|Delivered Message| E[Recipient]
+    D -->|Delivery Status| A
+```
+
+### 11. Acceptance Criteria
+
+Each functional requirement must include acceptance criteria defining when the requirement is satisfied.
+
+Acceptance criteria must be:
+- Clear
+- Testable
+- Written from a user perspective
+
+**Format:**
+```
+Given [context]
+When [action]
+Then [expected outcome]
+```
+
+**Example:**
+```
+FR-001 Acceptance Criteria:
+
+AC-001:
+Given user is authenticated
+When user submits message with valid content
+Then message is stored and delivered within 3 seconds
+
+AC-002:
+Given user is not authenticated
+When user attempts to send message
+Then system rejects request with 401 status
+```
+
+**Do not generate detailed test cases at the requirements stage.**
+
+### 12. Traceability
+
+Maintain traceability using the structure:
+
+```
+Persona → User Need → Requirement → User Story → Acceptance Criteria
+```
+
+**Traceability ensures every requirement maps back to a user need.**
+
+**Example:**
+```
+Persona: End User
+  ↓
+User Need: Send messages in real time
+  ↓
+FR-001: System must allow authenticated users to send text messages
+  ↓
+User Story: As an end user, I want to send messages so I can communicate
+  ↓
+AC-001: Message delivered within 3 seconds
+```
+
+### 13. Ambiguity Detection
+
+Identify unclear or ambiguous requirements and flag them for clarification.
+
+**Examples of ambiguity:**
+- Vague performance expectations ("should be fast")
+- Missing acceptance criteria
+- Undefined system behaviors ("handle errors appropriately")
+- Unclear quantifications ("many users", "large files")
+- Missing edge cases
+
+**Flag with:**
+```
+⚠️ AMBIGUITY DETECTED
+Requirement: [ID or description]
+Issue: [What is unclear]
+Suggested Clarification: [What needs to be specified]
+```
+
+---
+
+## Output Artifacts
+
+Requirements analysis must generate the following artifacts. ALL artifacts MUST be output strictly to the specific lambda domain's documentation folder: `backend/lambdas/{name}/docs/`.
+
+### 1. {name}-personas.md
+- Complete persona definitions
+- Roles, goals, and key needs for each persona
+
+### 2. user-needs.md
+- User needs organized by persona
+- Clear problem statements
+
+### 3. requirements.md
+- All functional requirements
+- Structured with ID, description, persona, priority, acceptance criteria
+
+### 4. technical-requirements.md
+- All technical requirements and constraints
+- Performance, scalability, security, availability expectations
+- Measurable specifications
+
+### 5. business-rules.md
+- All business rules
+- Structured with ID, description, conditions, expected outcome
+
+### 6. domain-model.md
+- Key domain entities
+- Entity descriptions and key attributes
+- Entity relationships (conceptual)
+
+### 7. actors.md
+- All actors interacting with the system
+- Actor types and interaction descriptions
+
+### 8. workflows.md
+- Major workflows extracted from requirements
+- Step-by-step workflow descriptions
+
+### 9. process-flows.md
+- Process flow diagrams in Mermaid syntax
+- Business process representations
+
+### 10. data-flows.md
+- Data flow diagrams in Mermaid syntax
+- Logical data movement between actors and components
+
+### 11. traceability.md
+- Traceability matrix
+- Persona → Need → Requirement → Story → Acceptance Criteria mappings
+
+### 12. ambiguities.md
+- Flagged ambiguities and unclear requirements
+- Suggested clarifications
+
+---
+
+## Quality Expectations
+
+Generated requirements must be:
+
+- **Clear and unambiguous**: No vague language or undefined terms
+- **Aligned with user needs**: Every requirement traces back to a user need
+- **Traceable**: Maintain traceability across development stages
+- **Suitable as design inputs**: Ready for architecture and system design
+- **Testable**: Include clear acceptance criteria
+- **Prioritized**: Must / Should / Nice-to-have classification
+- **Complete**: Cover all identified user needs and personas
+- **Consistent**: No conflicting requirements
+
+---
+
+## Integration with Development Workflow
+
+Requirements analysis output feeds into:
+
+1. **System Architecture**: Technical requirements and domain model inform architecture decisions
+2. **System Design**: Functional requirements and workflows guide design
+3. **User Story Creation**: Requirements become detailed user stories
+4. **Test Planning**: Acceptance criteria inform test case development
+5. **Implementation**: Clear requirements enable accurate development
+
+---
+
+## Usage Guidelines
+
+When performing requirements analysis:
+
+1. **Start with understanding**: Focus on personas and user needs first
+2. **Extract, don't invent**: Derive requirements from provided context
+3. **Avoid architecture assumptions**: Stay at requirements level
+4. **Flag gaps**: Identify missing information rather than making assumptions
+5. **Maintain traceability**: Ensure every requirement links to a user need
+6. **Be specific**: Use measurable criteria where possible
+7. **Generate all artifacts**: Produce complete set of output documents
+8. **Validate quality**: Ensure requirements meet quality expectations
+
+---
+
+## Example Invocation
+
+```
+User: Analyze requirements for a real-time chat application
+```
+
+Expected output:
+- Complete set of 12 artifacts
+- Personas (End User, Administrator)
+- User needs (real-time communication, message management)
+- Functional requirements (send message, receive message, etc.)
+- Technical requirements (latency < 200ms, 99.9% availability)
+- Business rules (authentication required, admin privileges)
+- Domain model (User, Message, ChatSession)
+- Workflows and diagrams
+- Traceability matrix
+- Flagged ambiguities
+
+---
+
+## Anti-Patterns to Avoid
+
+❌ **Don't** specify implementation details (e.g., "use Redis for caching")
+✅ **Do** specify requirements (e.g., "message retrieval latency < 100ms")
+
+❌ **Don't** design the architecture in requirements
+✅ **Do** document constraints that will inform architecture
+
+❌ **Don't** create requirements without user needs
+✅ **Do** trace every requirement to a persona and need
+
+❌ **Don't** use vague language ("fast", "scalable", "user-friendly")
+✅ **Do** use measurable criteria ("< 200ms", "10,000 concurrent users")
+
+❌ **Don't** skip ambiguity detection
+✅ **Do** flag unclear requirements for clarification
+
+---
+
+## Success Criteria
+
+Requirements analysis is successful when:
+
+1. All personas and user needs are identified
+2. All functional requirements have clear acceptance criteria
+3. All technical requirements are measurable
+4. Complete traceability exists from personas to acceptance criteria
+5. All artifacts are generated
+6. Requirements are suitable inputs for architecture and design
+7. No ambiguities remain undetected
+8. Requirements align with quality expectations
