@@ -5,8 +5,11 @@ import json
 from unittest.mock import patch, Mock
 from datetime import datetime, timezone
 from pydantic import ValidationError
-from src.handlers.calculator_handler import lambda_handler, handle_add_request
-from src.domain.calculation import Calculation
+from src.handlers.calculator_handler import (
+    lambda_handler, handle_add_request, handle_subtract_request,
+    handle_multiply_request, handle_divide_request
+)
+from src.domain.calculation import Calculation, DivisionByZeroError
 
 
 def test_lambda_handler_returns_200(calculator_request_event, lambda_context, mock_calculator_service):
@@ -241,3 +244,209 @@ def test_handle_add_request_large_numbers(mock_calculator_service):
         response_payload = handle_add_request(event)
 
         assert response_payload['result'] == 3e100
+
+
+# --- Routing Tests ---
+
+
+def test_lambda_handler_routes_to_subtract(lambda_context, mock_calculator_service):
+    """Test path routing to subtract handler."""
+    event = {
+        'httpMethod': 'POST',
+        'path': '/calculator/subtract',
+        'headers': {'Content-Type': 'application/json'},
+        'body': json.dumps({"a": 10, "b": 3})
+    }
+
+    with patch('src.handlers.calculator_handler._calculator_service', mock_calculator_service):
+        mock_calculator_service.subtract.return_value = Calculation(
+            operand_a=10, operand_b=3, operation="subtract",
+            result=7, timestamp=datetime.now(timezone.utc)
+        )
+        response = lambda_handler(event, lambda_context)
+
+    assert response['statusCode'] == 200
+    body = json.loads(response['body'])
+    assert body['operation'] == 'subtract'
+
+
+def test_lambda_handler_routes_to_multiply(lambda_context, mock_calculator_service):
+    """Test path routing to multiply handler."""
+    event = {
+        'httpMethod': 'POST',
+        'path': '/calculator/multiply',
+        'headers': {'Content-Type': 'application/json'},
+        'body': json.dumps({"a": 5, "b": 3})
+    }
+
+    with patch('src.handlers.calculator_handler._calculator_service', mock_calculator_service):
+        mock_calculator_service.multiply.return_value = Calculation(
+            operand_a=5, operand_b=3, operation="multiply",
+            result=15, timestamp=datetime.now(timezone.utc)
+        )
+        response = lambda_handler(event, lambda_context)
+
+    assert response['statusCode'] == 200
+    body = json.loads(response['body'])
+    assert body['operation'] == 'multiply'
+
+
+def test_lambda_handler_routes_to_divide(lambda_context, mock_calculator_service):
+    """Test path routing to divide handler."""
+    event = {
+        'httpMethod': 'POST',
+        'path': '/calculator/divide',
+        'headers': {'Content-Type': 'application/json'},
+        'body': json.dumps({"a": 10, "b": 2})
+    }
+
+    with patch('src.handlers.calculator_handler._calculator_service', mock_calculator_service):
+        mock_calculator_service.divide.return_value = Calculation(
+            operand_a=10, operand_b=2, operation="divide",
+            result=5.0, timestamp=datetime.now(timezone.utc)
+        )
+        response = lambda_handler(event, lambda_context)
+
+    assert response['statusCode'] == 200
+    body = json.loads(response['body'])
+    assert body['operation'] == 'divide'
+
+
+def test_lambda_handler_default_routes_to_add(calculator_request_event, lambda_context, mock_calculator_service):
+    """Test unknown path defaults to add handler."""
+    with patch('src.handlers.calculator_handler._calculator_service', mock_calculator_service):
+        response = lambda_handler(calculator_request_event, lambda_context)
+
+    assert response['statusCode'] == 200
+    body = json.loads(response['body'])
+    assert body['operation'] == 'add'
+
+
+# --- Subtraction Handler Tests ---
+
+
+def test_handle_subtract_request_correct_values_AC_030(mock_calculator_service):
+    """Test subtract response has operation='subtract' (AC-030)."""
+    event = {'body': json.dumps({"a": 10, "b": 3})}
+
+    with patch('src.handlers.calculator_handler._calculator_service', mock_calculator_service):
+        mock_calculator_service.subtract.return_value = Calculation(
+            operand_a=10, operand_b=3, operation="subtract",
+            result=7, timestamp=datetime.now(timezone.utc)
+        )
+        payload = handle_subtract_request(event)
+
+    assert payload['operation'] == 'subtract'
+    assert payload['result'] == 7
+
+
+# --- Multiplication Handler Tests ---
+
+
+def test_handle_multiply_request_correct_values_AC_031(mock_calculator_service):
+    """Test multiply response has operation='multiply' (AC-031)."""
+    event = {'body': json.dumps({"a": 5, "b": 3})}
+
+    with patch('src.handlers.calculator_handler._calculator_service', mock_calculator_service):
+        mock_calculator_service.multiply.return_value = Calculation(
+            operand_a=5, operand_b=3, operation="multiply",
+            result=15, timestamp=datetime.now(timezone.utc)
+        )
+        payload = handle_multiply_request(event)
+
+    assert payload['operation'] == 'multiply'
+    assert payload['result'] == 15
+
+
+# --- Division Handler Tests ---
+
+
+def test_handle_divide_request_correct_values_AC_032(mock_calculator_service):
+    """Test divide response has operation='divide' (AC-032)."""
+    event = {'body': json.dumps({"a": 10, "b": 2})}
+
+    with patch('src.handlers.calculator_handler._calculator_service', mock_calculator_service):
+        mock_calculator_service.divide.return_value = Calculation(
+            operand_a=10, operand_b=2, operation="divide",
+            result=5.0, timestamp=datetime.now(timezone.utc)
+        )
+        payload = handle_divide_request(event)
+
+    assert payload['operation'] == 'divide'
+    assert payload['result'] == 5.0
+
+
+def test_handle_divide_by_zero_returns_400_AC_028(lambda_context):
+    """Test division by zero returns 400 via AOP propagation (AC-028)."""
+    event = {
+        'httpMethod': 'POST',
+        'path': '/calculator/divide',
+        'headers': {'Content-Type': 'application/json'},
+        'body': json.dumps({"a": 10, "b": 0})
+    }
+
+    response = lambda_handler(event, lambda_context)
+
+    assert response['statusCode'] == 400
+    body = json.loads(response['body'])
+    assert body['errorCode'] == 'DIVISION_BY_ZERO'
+
+
+def test_handle_divide_by_zero_error_format_AC_029(lambda_context):
+    """Test division by zero error includes correlationId (AC-029)."""
+    event = {
+        'httpMethod': 'POST',
+        'path': '/calculator/divide',
+        'headers': {'Content-Type': 'application/json'},
+        'body': json.dumps({"a": 10, "b": 0})
+    }
+
+    response = lambda_handler(event, lambda_context)
+
+    body = json.loads(response['body'])
+    assert 'errorCode' in body
+    assert 'message' in body
+    assert 'correlationId' in body
+    assert 'timestamp' in body
+
+
+# --- Validation for New Operations (FR-010) ---
+
+
+def test_subtract_missing_field_returns_400_AC_033(lambda_context):
+    """Test missing operand on subtract returns 400 (AC-033)."""
+    event = {
+        'httpMethod': 'POST',
+        'path': '/calculator/subtract',
+        'headers': {'Content-Type': 'application/json'},
+        'body': json.dumps({"a": 5})
+    }
+
+    response = lambda_handler(event, lambda_context)
+    assert response['statusCode'] == 400
+
+
+def test_multiply_non_numeric_returns_400_AC_034(lambda_context):
+    """Test non-numeric operand on multiply returns 400 (AC-034)."""
+    event = {
+        'httpMethod': 'POST',
+        'path': '/calculator/multiply',
+        'headers': {'Content-Type': 'application/json'},
+        'body': json.dumps({"a": "text", "b": 3})
+    }
+
+    response = lambda_handler(event, lambda_context)
+    assert response['statusCode'] == 400
+
+
+def test_divide_null_operand_returns_400_AC_035(lambda_context):
+    """Test null operand on divide returns 400 (AC-035)."""
+    event = {
+        'httpMethod': 'POST',
+        'path': '/calculator/divide',
+        'headers': {'Content-Type': 'application/json'},
+        'body': json.dumps({"a": None, "b": 3})
+    }
+
+    response = lambda_handler(event, lambda_context)
+    assert response['statusCode'] == 400

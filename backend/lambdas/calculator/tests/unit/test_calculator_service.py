@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone
 from src.services.calculator_service import CalculatorService
-from src.domain.calculation import Calculation
+from src.domain.calculation import Calculation, DivisionByZeroError
 
 
 def test_add_returns_calculation_domain_object():
@@ -135,8 +135,8 @@ def test_add_with_validation_error():
         invalid_calc = Calculation(
             operand_a=5,
             operand_b=3,
-            operation="multiply",  # Invalid
-            result=15,
+            operation="modulo",  # Invalid - not in VALID_OPERATIONS
+            result=2,
             timestamp=datetime.now(timezone.utc)
         )
         mock_create.return_value = invalid_calc
@@ -163,3 +163,142 @@ def test_multiple_calculations_with_same_service():
     assert result1.result == 8
     assert result2.result == 30
     assert result3.result == 4.0
+
+
+# --- Subtraction Service Tests ---
+
+
+def test_subtract_returns_calculation_domain_object():
+    """Test subtract() returns Calculation domain object."""
+    service = CalculatorService()
+    result = service.subtract(10, 3)
+
+    assert isinstance(result, Calculation)
+
+
+def test_subtract_correct_result():
+    """Test subtract() computes correct difference."""
+    service = CalculatorService()
+    result = service.subtract(10, 3)
+
+    assert result.result == 7
+
+
+def test_subtract_sets_operation():
+    """Test subtract() sets operation to 'subtract'."""
+    service = CalculatorService()
+    result = service.subtract(10, 3)
+
+    assert result.operation == "subtract"
+
+
+def test_subtract_with_observe_decorator():
+    """Test @observe decorator is transparent for subtract."""
+    service = CalculatorService()
+    result = service.subtract(5.5, 3.2)
+
+    assert abs(result.result - 2.3) < 1e-10
+
+
+def test_subtract_handles_negative_numbers():
+    """Test subtract() handles negative numbers."""
+    service = CalculatorService()
+    result = service.subtract(-5, -3)
+
+    assert result.result == -2
+
+
+# --- Multiplication Service Tests ---
+
+
+def test_multiply_returns_calculation_domain_object():
+    """Test multiply() returns Calculation domain object."""
+    service = CalculatorService()
+    result = service.multiply(5, 3)
+
+    assert isinstance(result, Calculation)
+
+
+def test_multiply_correct_result():
+    """Test multiply() computes correct product."""
+    service = CalculatorService()
+    result = service.multiply(5, 3)
+
+    assert result.result == 15
+
+
+def test_multiply_sets_operation():
+    """Test multiply() sets operation to 'multiply'."""
+    service = CalculatorService()
+    result = service.multiply(5, 3)
+
+    assert result.operation == "multiply"
+
+
+def test_multiply_with_observe_decorator():
+    """Test @observe decorator is transparent for multiply."""
+    service = CalculatorService()
+    result = service.multiply(2.5, 4.0)
+
+    assert abs(result.result - 10.0) < 1e-10
+
+
+def test_multiply_handles_zero():
+    """Test multiply() with zero returns zero."""
+    service = CalculatorService()
+    result = service.multiply(5, 0)
+
+    assert result.result == 0
+
+
+# --- Division Service Tests ---
+
+
+def test_divide_returns_calculation_domain_object():
+    """Test divide() returns Calculation domain object."""
+    service = CalculatorService()
+    result = service.divide(10, 2)
+
+    assert isinstance(result, Calculation)
+
+
+def test_divide_correct_result():
+    """Test divide() computes correct quotient."""
+    service = CalculatorService()
+    result = service.divide(10, 2)
+
+    assert result.result == 5.0
+
+
+def test_divide_sets_operation():
+    """Test divide() sets operation to 'divide'."""
+    service = CalculatorService()
+    result = service.divide(10, 2)
+
+    assert result.operation == "divide"
+
+
+def test_divide_with_observe_decorator():
+    """Test @observe decorator is transparent for divide."""
+    service = CalculatorService()
+    result = service.divide(7.5, 2.5)
+
+    assert abs(result.result - 3.0) < 1e-10
+
+
+def test_divide_by_zero_raises_error():
+    """Test divide() propagates DivisionByZeroError from domain."""
+    service = CalculatorService()
+
+    with pytest.raises(DivisionByZeroError):
+        service.divide(10, 0)
+
+
+def test_all_operations_with_same_service():
+    """Test all four operations work on the same service instance."""
+    service = CalculatorService()
+
+    assert service.add(5, 3).result == 8
+    assert service.subtract(5, 3).result == 2
+    assert service.multiply(5, 3).result == 15
+    assert service.divide(6, 3).result == 2.0

@@ -189,11 +189,8 @@ class CalculatorStack(Stack):
         # /calculator resource
         calculator_resource = api.root.add_resource("calculator")
 
-        # /calculator/add resource
-        add_resource = calculator_resource.add_resource("add")
-
-        # POST /calculator/add integration with Cognito auth
-        add_integration = apigw.LambdaIntegration(
+        # Shared Lambda integration (single Lambda handles all operations via path routing)
+        lambda_integration = apigw.LambdaIntegration(
             self.calculator_lambda,
             proxy=True,
             integration_responses=[
@@ -203,17 +200,31 @@ class CalculatorStack(Stack):
             ]
         )
 
-        add_resource.add_method(
-            "POST",
-            add_integration,
-            authorizer=authorizer,
-            authorization_type=apigw.AuthorizationType.COGNITO,
-            method_responses=[
+        method_options = {
+            "authorizer": authorizer,
+            "authorization_type": apigw.AuthorizationType.COGNITO,
+            "method_responses": [
                 apigw.MethodResponse(status_code="200"),
                 apigw.MethodResponse(status_code="400"),
                 apigw.MethodResponse(status_code="500")
             ]
-        )
+        }
+
+        # POST /calculator/add
+        add_resource = calculator_resource.add_resource("add")
+        add_resource.add_method("POST", lambda_integration, **method_options)
+
+        # POST /calculator/subtract (FR-005)
+        subtract_resource = calculator_resource.add_resource("subtract")
+        subtract_resource.add_method("POST", lambda_integration, **method_options)
+
+        # POST /calculator/multiply (FR-006)
+        multiply_resource = calculator_resource.add_resource("multiply")
+        multiply_resource.add_method("POST", lambda_integration, **method_options)
+
+        # POST /calculator/divide (FR-007)
+        divide_resource = calculator_resource.add_resource("divide")
+        divide_resource.add_method("POST", lambda_integration, **method_options)
 
         return api
 
@@ -508,6 +519,27 @@ class CalculatorStack(Stack):
             value=f"{self.api.url}calculator/add",
             description="Calculator addition endpoint URL",
             export_name="CalculatorAddUrl"
+        )
+
+        CfnOutput(
+            self, "CalculatorSubtractEndpoint",
+            value=f"{self.api.url}calculator/subtract",
+            description="Calculator subtraction endpoint URL",
+            export_name="CalculatorSubtractUrl"
+        )
+
+        CfnOutput(
+            self, "CalculatorMultiplyEndpoint",
+            value=f"{self.api.url}calculator/multiply",
+            description="Calculator multiplication endpoint URL",
+            export_name="CalculatorMultiplyUrl"
+        )
+
+        CfnOutput(
+            self, "CalculatorDivideEndpoint",
+            value=f"{self.api.url}calculator/divide",
+            description="Calculator division endpoint URL",
+            export_name="CalculatorDivideUrl"
         )
 
         CfnOutput(

@@ -14,11 +14,11 @@ from datetime import datetime
 
 
 @pytest.fixture
-def api_endpoint():
-    """API endpoint URL from CDK outputs or environment variable.
+def api_base():
+    """API base URL from environment variable.
 
     Returns:
-        str: API endpoint URL for /calculator/add
+        str: API base URL for /calculator
 
     Raises:
         pytest.skip: If API_ENDPOINT not set
@@ -27,7 +27,17 @@ def api_endpoint():
     endpoint = os.getenv("API_ENDPOINT")
     if not endpoint:
         pytest.skip("API_ENDPOINT not set - integration tests require deployed API")
-    return endpoint.rstrip('/') + '/calculator/add'
+    return endpoint.rstrip('/') + '/calculator'
+
+
+@pytest.fixture
+def api_endpoint(api_base):
+    """API endpoint URL for /calculator/add (backward compatible).
+
+    Returns:
+        str: API endpoint URL for /calculator/add
+    """
+    return api_base + '/add'
 
 
 # ============================================================================
@@ -224,3 +234,121 @@ def test_calculator_empty_body(api_endpoint):
 
     # Assert
     assert response.status_code == 400, f"Expected 400, got {response.status_code}"
+
+
+# ============================================================================
+# Subtraction Endpoint Tests (FR-005)
+# ============================================================================
+
+@pytest.mark.integration
+def test_calculator_subtract_end_to_end(api_base):
+    """Test POST /calculator/subtract returns correct difference."""
+    payload = {"a": 10, "b": 3}
+    response = requests.post(f"{api_base}/subtract", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["operation"] == "subtract"
+    assert body["result"] == 7
+    assert body["a"] == 10
+    assert body["b"] == 3
+
+
+@pytest.mark.integration
+def test_calculator_subtract_negative_result(api_base):
+    """Test subtraction producing negative result."""
+    payload = {"a": 3, "b": 10}
+    response = requests.post(f"{api_base}/subtract", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"] == -7
+
+
+@pytest.mark.integration
+def test_calculator_subtract_invalid_body(api_base):
+    """Test subtract returns 400 for invalid input."""
+    payload = {"a": "text", "b": 3}
+    response = requests.post(f"{api_base}/subtract", json=payload)
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["errorCode"] == "VALIDATION_ERROR"
+
+
+# ============================================================================
+# Multiplication Endpoint Tests (FR-006)
+# ============================================================================
+
+@pytest.mark.integration
+def test_calculator_multiply_end_to_end(api_base):
+    """Test POST /calculator/multiply returns correct product."""
+    payload = {"a": 4, "b": 5}
+    response = requests.post(f"{api_base}/multiply", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["operation"] == "multiply"
+    assert body["result"] == 20
+    assert body["a"] == 4
+    assert body["b"] == 5
+
+
+@pytest.mark.integration
+def test_calculator_multiply_by_zero(api_base):
+    """Test multiplication by zero returns zero."""
+    payload = {"a": 100, "b": 0}
+    response = requests.post(f"{api_base}/multiply", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"] == 0
+
+
+@pytest.mark.integration
+def test_calculator_multiply_invalid_body(api_base):
+    """Test multiply returns 400 for invalid input."""
+    payload = {"a": 5}
+    response = requests.post(f"{api_base}/multiply", json=payload)
+
+    assert response.status_code == 400
+
+
+# ============================================================================
+# Division Endpoint Tests (FR-007)
+# ============================================================================
+
+@pytest.mark.integration
+def test_calculator_divide_end_to_end(api_base):
+    """Test POST /calculator/divide returns correct quotient."""
+    payload = {"a": 10, "b": 2}
+    response = requests.post(f"{api_base}/divide", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["operation"] == "divide"
+    assert body["result"] == 5.0
+    assert body["a"] == 10
+    assert body["b"] == 2
+
+
+@pytest.mark.integration
+def test_calculator_divide_by_zero_returns_400(api_base):
+    """Test division by zero returns 400 with DIVISION_BY_ZERO error (AC-028)."""
+    payload = {"a": 10, "b": 0}
+    response = requests.post(f"{api_base}/divide", json=payload)
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["errorCode"] == "DIVISION_BY_ZERO"
+    assert "correlationId" in body
+    assert "timestamp" in body
+
+
+@pytest.mark.integration
+def test_calculator_divide_invalid_body(api_base):
+    """Test divide returns 400 for null operand."""
+    payload = {"a": None, "b": 3}
+    response = requests.post(f"{api_base}/divide", json=payload)
+
+    assert response.status_code == 400

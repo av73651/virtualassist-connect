@@ -73,3 +73,63 @@ def fixed_datetime():
         datetime: Fixed datetime object (2026-03-28 10:00:00 UTC, timezone-aware)
     """
     return datetime(2026, 3, 28, 10, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def subtract_request_event():
+    """API Gateway event for POST /calculator/subtract request."""
+    return {
+        'resource': '/calculator/subtract',
+        'httpMethod': 'POST',
+        'path': '/calculator/subtract',
+        'headers': {
+            'Content-Type': 'application/json'
+        },
+        'requestContext': {
+            'requestId': 'test-request-id'
+        },
+        'body': json.dumps({
+            "a": 10,
+            "b": 3
+        })
+    }
+
+
+@pytest.fixture
+def multiply_request_event():
+    """API Gateway event for POST /calculator/multiply request."""
+    return {
+        'resource': '/calculator/multiply',
+        'httpMethod': 'POST',
+        'path': '/calculator/multiply',
+        'headers': {
+            'Content-Type': 'application/json'
+        },
+        'requestContext': {
+            'requestId': 'test-request-id'
+        },
+        'body': json.dumps({
+            "a": 4,
+            "b": 5
+        })
+    }
+
+
+@pytest.fixture
+def divide_request_event():
+    """API Gateway event for POST /calculator/divide request."""
+    return {
+        'resource': '/calculator/divide',
+        'httpMethod': 'POST',
+        'path': '/calculator/divide',
+        'headers': {
+            'Content-Type': 'application/json'
+        },
+        'requestContext': {
+            'requestId': 'test-request-id'
+        },
+        'body': json.dumps({
+            "a": 10,
+            "b": 2
+        })
+    }
