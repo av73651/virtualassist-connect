@@ -102,6 +102,28 @@ class ErrorResponse(BaseModel):
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         )
 
+    @classmethod
+    def create_business_rule_error(cls, correlation_id: str, error_code: str, message: str) -> "ErrorResponse":
+        """Create error response for any business rule violation.
+
+        Generic factory - works for DivisionByZeroError or any future BusinessRuleError subclass.
+        The error_code and message come from the exception itself.
+
+        Args:
+            correlation_id: Trace ID for request correlation
+            error_code: Machine-readable error code from BusinessRuleError.error_code
+            message: Human-readable message from the exception
+
+        Returns:
+            ErrorResponse: Business rule error with 400 status
+        """
+        return cls(
+            errorCode=error_code,
+            message=message,
+            correlationId=correlation_id,
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        )
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {

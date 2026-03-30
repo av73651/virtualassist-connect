@@ -4,6 +4,7 @@ from functools import wraps
 from typing import Callable, Any
 from pydantic import ValidationError
 from src.dto.response import ErrorResponse
+from shared.exceptions.business_rule_error import BusinessRuleError
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,31 @@ def api_gateway_handler(func: Callable) -> Callable:
             )
 
             error_response = ErrorResponse.create_validation_error(trace_id, str(e))
+
+            return {
+                'statusCode': 400,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'X-Trace-Id': trace_id
+                },
+                'body': json.dumps(error_response.to_dict())
+            }
+
+        except BusinessRuleError as e:
+            # Business rule violation - domain raised, @observe already logged/traced
+            logger.warning(
+                "API Request failed business rule validation",
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "error_code": e.error_code,
+                    "trace_id": trace_id
+                }
+            )
+
+            error_response = ErrorResponse.create_business_rule_error(
+                trace_id, e.error_code, str(e)
+            )
 
             return {
                 'statusCode': 400,

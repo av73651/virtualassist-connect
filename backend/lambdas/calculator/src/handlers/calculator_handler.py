@@ -31,6 +31,9 @@ _calculator_service = CalculatorService()
 def lambda_handler(event: dict, context: Any, trace_id: str) -> dict:
     """Lambda entry point for Calculator API requests.
 
+    Routes to appropriate operation handler based on API Gateway path.
+    All error handling via AOP decorators - no try/catch here.
+
     Args:
         event: API Gateway proxy event
         context: Lambda context
@@ -39,42 +42,62 @@ def lambda_handler(event: dict, context: Any, trace_id: str) -> dict:
     Returns:
         dict: The DTO payload. @api_gateway_handler will automatically format it
               as a proper HTTP 200 JSON API Gateway response.
-
-    Raises:
-        ValidationError: If request body is invalid (caught by middleware → 400)
-        Exception: Any unexpected error (caught by middleware → 500)
     """
-    return handle_add_request(event)
+    path = event.get('path', '')
+
+    if path.endswith('/subtract'):
+        return handle_subtract_request(event)
+    elif path.endswith('/multiply'):
+        return handle_multiply_request(event)
+    elif path.endswith('/divide'):
+        return handle_divide_request(event)
+    else:
+        return handle_add_request(event)
 
 
-def handle_add_request(event: dict) -> dict:
-    """Handle POST /calculator/add request.
-
-    Handler layer responsibilities:
-    1. Parse and validate request body (DTO)
-    2. Call service layer (gets domain object)
-    3. Convert domain object to DTO
+def _parse_request(event: dict) -> CalculatorRequest:
+    """Parse and validate request body from API Gateway event.
 
     Args:
         event: API Gateway proxy event
 
     Returns:
-        dict: The JSON-serializable DTO response payload
+        CalculatorRequest: Validated request DTO
 
     Raises:
         ValidationError: If request body validation fails (Pydantic)
     """
-    # Parse request body
-    body_str = event.get('body', '{}')
-    body = json.loads(body_str)
+    body = json.loads(event.get('body', '{}'))
+    return CalculatorRequest(**body)
 
-    # Validate using Pydantic DTO (raises ValidationError if invalid)
-    request_dto = CalculatorRequest(**body)
 
-    # Use module-level singleton (efficient, reuses instance across invocations)
+def handle_add_request(event: dict) -> dict:
+    """Handle POST /calculator/add request."""
+    request_dto = _parse_request(event)
     calculation = _calculator_service.add(request_dto.a, request_dto.b)
+    return CalculatorResponse.from_calculation(calculation).to_dict()
 
-    # Convert domain object to DTO (handler layer responsibility)
-    response_dto = CalculatorResponse.from_calculation(calculation)
 
-    return response_dto.to_dict()
+def handle_subtract_request(event: dict) -> dict:
+    """Handle POST /calculator/subtract request (FR-005)."""
+    request_dto = _parse_request(event)
+    calculation = _calculator_service.subtract(request_dto.a, request_dto.b)
+    return CalculatorResponse.from_calculation(calculation).to_dict()
+
+
+def handle_multiply_request(event: dict) -> dict:
+    """Handle POST /calculator/multiply request (FR-006)."""
+    request_dto = _parse_request(event)
+    calculation = _calculator_service.multiply(request_dto.a, request_dto.b)
+    return CalculatorResponse.from_calculation(calculation).to_dict()
+
+
+def handle_divide_request(event: dict) -> dict:
+    """Handle POST /calculator/divide request (FR-007).
+
+    DivisionByZeroError propagation path:
+    Domain (raises) -> @observe (logs/metrics/traces) -> Handler (no catch) -> @api_gateway_handler (HTTP 400)
+    """
+    request_dto = _parse_request(event)
+    calculation = _calculator_service.divide(request_dto.a, request_dto.b)
+    return CalculatorResponse.from_calculation(calculation).to_dict()
