@@ -26,13 +26,20 @@ def api_gateway_handler(func: Callable) -> Callable:
         request_id = getattr(context, 'request_id', 'unknown-request-id')
         trace_id = event.get('headers', {}).get('X-Amzn-Trace-Id', request_id)
 
+        # Extract Cognito user ID from authorizer claims (if authenticated)
+        claims = (event.get('requestContext', {})
+                  .get('authorizer', {})
+                  .get('claims', {}))
+        user_id = claims.get('sub', 'anonymous')
+
         logger.info(
             "API Request received",
             extra={
                 "http_method": event.get('httpMethod'),
                 "path": event.get('path'),
                 "trace_id": trace_id,
-                "request_id": request_id
+                "request_id": request_id,
+                "user_id": user_id
             }
         )
 
@@ -58,7 +65,8 @@ def api_gateway_handler(func: Callable) -> Callable:
                 "API Request completed successfully",
                 extra={
                     "status_code": response.get('statusCode', 200),
-                    "trace_id": trace_id
+                    "trace_id": trace_id,
+                    "user_id": user_id
                 }
             )
             return response
@@ -71,6 +79,8 @@ def api_gateway_handler(func: Callable) -> Callable:
                     "error": str(e),
                     "error_type": "ValidationError",
                     "trace_id": trace_id,
+                    "user_id": user_id,
+                    "request_body": event.get('body'),
                     "validation_errors": e.errors()
                 }
             )
@@ -94,7 +104,9 @@ def api_gateway_handler(func: Callable) -> Callable:
                     "error": str(e),
                     "error_type": type(e).__name__,
                     "error_code": e.error_code,
-                    "trace_id": trace_id
+                    "trace_id": trace_id,
+                    "user_id": user_id,
+                    "request_body": event.get('body')
                 }
             )
 
@@ -118,7 +130,9 @@ def api_gateway_handler(func: Callable) -> Callable:
                 extra={
                     "error": str(e),
                     "error_type": type(e).__name__,
-                    "trace_id": trace_id
+                    "trace_id": trace_id,
+                    "user_id": user_id,
+                    "request_body": event.get('body')
                 },
                 exc_info=True
             )

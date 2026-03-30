@@ -51,8 +51,23 @@ logger.error("Operation failed", extra={
 - **INFO**: Normal operations (User created, request processed)
 - **ERROR**: Failures (Validation failed, service unavailable)
 
-#### ❌ DON'T: Log PII
-Never log passwords, Social Security Numbers, or credit card info.
+### Incident Debugging Context
+
+The `@api_gateway_handler` middleware automatically enriches logs with:
+
+- **`user_id`**: Cognito `sub` claim from JWT (all log entries — request, success, error)
+- **`request_body`**: Raw request body (error log entries only — not on success to reduce noise)
+
+These fields enable filtering by affected user and inspecting the payload that caused failures.
+
+```python
+# Automatically available in CloudWatch logs:
+# - "user_id": "cognito-sub-uuid" (or "anonymous" if unauthenticated)
+# - "request_body": "{\"a\": \"bad\"}" (on errors only)
+```
+
+#### DON'T: Log PII
+Never log passwords, Social Security Numbers, or credit card info. Request bodies are logged on error only and must not contain sensitive fields. If a service handles PII in request bodies, override this behavior by sanitizing before logging.
 
 ---
 
