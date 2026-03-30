@@ -288,7 +288,7 @@ class CalculatorStack(Stack):
         """Create CloudWatch dashboard for observability."""
         dashboard = cloudwatch.Dashboard(
             self, "CalculatorDashboard",
-            dashboard_name="calculator-api-dashboard"
+            dashboard_name=f"calculator-api-dashboard-{self.config['api_gateway']['stage_name']}"
         )
 
         # Lambda metrics
@@ -470,7 +470,7 @@ class CalculatorStack(Stack):
         # High error rate alarm
         cloudwatch.Alarm(
             self, "HighErrorRateAlarm",
-            alarm_name="calculator-high-error-rate",
+            alarm_name=f"calculator-high-error-rate-{self.config['api_gateway']['stage_name']}",
             metric=self.calculator_lambda.metric_errors(statistic="Sum"),
             threshold=10,
             evaluation_periods=2,
@@ -481,7 +481,7 @@ class CalculatorStack(Stack):
         # High latency alarm
         cloudwatch.Alarm(
             self, "HighLatencyAlarm",
-            alarm_name="calculator-high-latency",
+            alarm_name=f"calculator-high-latency-{self.config['api_gateway']['stage_name']}",
             metric=self.calculator_lambda.metric_duration(statistic="p99"),
             threshold=500,  # 500ms
             evaluation_periods=2,
@@ -492,7 +492,7 @@ class CalculatorStack(Stack):
         # High 4XX error rate alarm (validation errors)
         cloudwatch.Alarm(
             self, "High4XXErrorAlarm",
-            alarm_name="calculator-high-4xx-errors",
+            alarm_name=f"calculator-high-4xx-errors-{self.config['api_gateway']['stage_name']}",
             metric=cloudwatch.Metric(
                 namespace="AWS/ApiGateway",
                 metric_name="4XXError",

@@ -270,7 +270,7 @@ class HelloWorldStack(Stack):
         """Create CloudWatch dashboard for observability."""
         dashboard = cloudwatch.Dashboard(
             self, "HelloWorldDashboard",
-            dashboard_name="hello-world-api-dashboard"
+            dashboard_name=f"hello-world-api-dashboard-{self.config['api_gateway']['stage_name']}"
         )
 
         # Lambda metrics
@@ -420,7 +420,7 @@ class HelloWorldStack(Stack):
         # High error rate alarm
         cloudwatch.Alarm(
             self, "HighErrorRateAlarm",
-            alarm_name="hello-world-high-error-rate",
+            alarm_name=f"hello-world-high-error-rate-{self.config['api_gateway']['stage_name']}",
             metric=self.hello_lambda.metric_errors(statistic="Sum"),
             threshold=10,
             evaluation_periods=2,
@@ -431,7 +431,7 @@ class HelloWorldStack(Stack):
         # High latency alarm
         cloudwatch.Alarm(
             self, "HighLatencyAlarm",
-            alarm_name="hello-world-high-latency",
+            alarm_name=f"hello-world-high-latency-{self.config['api_gateway']['stage_name']}",
             metric=self.hello_lambda.metric_duration(statistic="p99"),
             threshold=500,  # 500ms
             evaluation_periods=2,

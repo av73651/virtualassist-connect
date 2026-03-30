@@ -15,7 +15,7 @@
 3. Commit history must be readable and meaningful.
 4. Code must always build successfully.
 5. Secrets, credentials, and environment files must never be committed.
-6. Follow the 6-phase SDLC workflow with mandatory approval gates (see `WORKFLOW-GATES.md`).
+6. Follow the SDLC workflow: Requirements → Design (approval gate) → Implementation → Final Review.
 7. All code must conform to the platform architecture defined in `skills/definitions/technology-standards.md`.
 
 ---
@@ -235,20 +235,32 @@ Do not introduce unapproved technologies without human approval.
 
 # 8. SDLC Workflow and Approval Gates
 
-All feature work follows a 6-phase workflow defined in `docs/workflows/`. Each phase has a mandatory gate defined in `WORKFLOW-GATES.md`.
+All feature work follows a streamlined workflow with two approval gates.
 
-| Phase | Gate | AI Must Stop Before |
-|-------|------|---------------------|
-| 1. Requirements | Requirements Review | Design |
-| 2. Design | Design Review (MOST CRITICAL) | Task breakdown |
-| 3. Task Elaboration | Task Review | Code generation |
-| 4. Implementation | Code + Test Review (per task) | Next task |
-| 5. Integration | Integration Review | Documentation |
-| 6. Documentation | Documentation Review | Production deploy |
+## Phases
 
-**Gate protocol**: Complete work -> Generate review report -> Present to developer -> STOP -> Wait for explicit "approved" before proceeding.
+| Phase | Description | Gate |
+|-------|-------------|------|
+| 1. Requirements | Analyze requirements, define acceptance criteria | Requirements Review |
+| 2. Design | App design, infra design, architecture decisions | **Design Review (CRITICAL)** |
+| 3. Implementation | Execute task categories below autonomously | Final Review |
 
-See `WORKFLOW-GATES.md` for full gate protocol and anti-patterns.
+**Gate protocol**: Complete work -> Present summary to developer -> STOP -> Wait for explicit "approved" before proceeding.
+
+## Post-Design Task Categories
+
+After design approval, work is organized into these task categories executed sequentially:
+
+| # | Category | Scope | Examples |
+|---|----------|-------|---------|
+| 1 | **Application Development** | Domain, services, handlers, DTOs | Factory methods, service methods, routing, middleware changes |
+| 2 | **Unit Testing** | Tests per layer with coverage target | test_domain.py, test_services.py, test_handlers.py, test_dto.py |
+| 3 | **Infrastructure Development** | CDK stacks, API Gateway, IAM, CloudWatch | New routes, alarms, dashboard widgets, Lambda config |
+| 4 | **Integration Testing** | End-to-end API tests against deployed infra | test_api_integration.py with real endpoints |
+| 5 | **Deployment & Verification** | Package, deploy, smoke test in AWS | Lambda packaging, `cdk deploy`, endpoint verification |
+| 6 | **Documentation** | Traceability, review reports | Update traceability matrix, implementation report |
+
+AI proceeds through all task categories autonomously after design approval. No intermediate gates between categories.
 
 ---
 
@@ -324,14 +336,20 @@ Shared resources (Cognito) live in `infra/stacks/auth_stack.py`.
 
 # 13. AI Agent Task Execution Workflow
 
-When implementing a new service, follow this sequence:
+When implementing a new service or feature, follow this sequence:
 
 1. Pull latest: `git pull origin main`
 2. Create branch: `git checkout -b feature/<service-name>`
-3. Follow the 6-phase SDLC (stopping at each gate for approval)
-4. Use skills from `skills/definitions/` for each phase
-5. Create logical commits per task
-6. Push branch and generate PR summary
+3. **Requirements**: Analyze and define acceptance criteria → present for approval
+4. **Design**: App design + infra design → present for approval (CRITICAL GATE)
+5. **Implementation** (autonomous after design approval):
+   - Application development (domain → services → handlers → DTOs)
+   - Unit testing (all layers, 80%+ coverage)
+   - Infrastructure development (CDK stack changes)
+   - Integration testing
+   - Deploy to dev and verify (`cdk deploy`, smoke tests)
+   - Documentation (traceability, review report)
+6. Present final review → commit, push, create PR
 
 ---
 
