@@ -215,3 +215,19 @@ All incident scripts live in `scripts/incident/`:
 | `health-check.sh` | Validate all endpoints return expected responses |
 
 Scripts accept `--stage` to target the right environment and auto-detect endpoints from CloudFormation.
+
+---
+
+## 9. SERVICE-SPECIFIC ADDENDA
+
+Each AWS service has unique alarm definitions, failure patterns, Logs Insights queries, and decision trees. These live in focused addenda that extend this parent skill:
+
+| Service | Addendum | Key Failure Modes |
+|---------|----------|-------------------|
+| Lambda | `incident-management-lambda.md` | Function errors, OOM, throttling, timeouts, cold starts |
+| API Gateway | `incident-management-api-gateway.md` | 5xx/4xx spikes, latency, WAF blocks, integration timeouts |
+| DynamoDB | `incident-management-dynamodb.md` | Throttling, hot partitions, GSI issues, stream lag |
+| OpenSearch | `incident-management-opensearch.md` | Cluster health, disk/JVM pressure, indexing failures |
+| EventBridge | `incident-management-eventbridge.md` | Failed invocations, DLQ depth, rule failures |
+
+**How to use**: Start with this parent file for the general incident framework (detection, log structure, trace correlation, resolution process). Then open the relevant service addendum for service-specific alarm tables, classification patterns, diagnostic queries, and decision trees.

@@ -1,509 +1,773 @@
-# Incident Management Pipeline — Requirements
+# Incident Management Pipeline -- Requirements
 
 ## Overview
 
-Automated incident detection, self-healing, and escalation pipeline built in three legs:
+Automated incident detection, self-healing, and escalation pipeline built as three independent Lambdas:
 
-- **Leg 1 — Incident Detection & Creation**: Alarm fires → cool-off check → deduplication → create incident record in DynamoDB and Jira (minimal ticket)
-- **Leg 2 — Automated Triage & Self-Healing**: Log analysis → root cause classification → blast radius assessment → remediation attempt → if resolved, close incident; if not, escalate to Leg 3
-- **Leg 3 — Engineer Escalation & Resolution**: Enrich Jira ticket with full diagnostics and analysis → notify support engineer → track resolution through to closure
+- **Leg 1 -- Detection Lambda**: Alarm fires -> cool-off check -> deduplication -> storm check -> create Jira incident -> emit event
+- **Leg 2 -- Triage Lambda**: Log analysis -> root cause classification -> blast radius -> remediation attempt -> verify -> recovery workflow -> resolve or escalate
+- **Leg 3 -- Escalation Lambda**: Enrich Jira ticket with full diagnostics -> notify engineer
 
-The system tries to resolve the incident automatically before engaging a human. When escalation is necessary, the support engineer receives a fully analyzed ticket — not raw logs.
+The system tries to resolve incidents automatically before engaging a human. When escalation is necessary, the engineer receives a fully analyzed Jira ticket -- not raw logs.
+
+**Key architectural decisions**:
+- **3 independent Lambdas** (one per pipeline leg) for failure isolation and scoped permissions
+- **Jira is the system of record** -- owns full incident lifecycle, diagnostics, and history
+- **DynamoDB is minimal** -- correlation and idempotency only (incident_key -> jira_ticket_id)
+- **EventBridge** for event-driven orchestration between Lambdas
+- **Incident storm detection** -- disables automation when many alarms fire simultaneously
+- **Recovery models** -- classifies incidents by what needs fixing after service restoration (stateless, replay, reprocess, data-correction, backlog-drain); triggers external recovery workflows
+- **Externalized configuration** -- operational tuning in `incident_config.json`, workflow logic in code
 
 ## Actors
 
 | Actor | Description |
 |-------|-------------|
 | CloudWatch Alarm | Triggers pipeline on threshold breach or recovery |
-| Incident Manager Lambda | Processes alarm events, orchestrates all three legs |
-| Support Engineer | Engaged only after self-healing fails; receives analyzed ticket |
-| Jira (API Service Desk) | Ticket system — tracks incident through full lifecycle |
-| Remediation Engine | Automated self-healing actions based on alarm type |
+| Detection Lambda | Leg 1: processes SNS alarm events, creates Jira incidents, publishes IncidentCreated |
+| Triage Lambda | Leg 2: analyzes, remediates, verifies; publishes EscalationRequired or IncidentAutoResolved |
+| Escalation Lambda | Leg 3: enriches Jira, notifies engineer |
+| Support Engineer | Engaged only after self-healing fails; receives analyzed Jira ticket |
+| Jira (API Service Desk) | System of record -- incident lifecycle, diagnostics, history |
+| DynamoDB | Correlation store -- incident_key -> jira_ticket_id, idempotency, storm detection |
+| EventBridge | Workflow orchestration between pipeline legs |
 
 ## Incident Lifecycle & Status Flow
 
 ```
 ALARM fires
-  → DETECTED (Leg 1: cool-off, dedup, record created, minimal Jira ticket)
-    → TRIAGING (Leg 2: log analysis, root cause classification, blast radius)
-      ├─ remediation available:
-      │   → REMEDIATING (execute remediation action)
-      │     → VERIFYING (wait verification period, run 3-point check)
-      │       ├─ all checks pass:
-      │       │   → AUTO-RESOLVED (collect evidence, update Jira, close, enter grace period)
-      │       │     └─ alarm recurs within grace period:
-      │       │         → ESCALATED (reopen, skip remediation, go to Leg 3)
-      │       └─ any check fails:
-      │           → ESCALATED (Leg 3: enrich ticket, notify engineer)
-      └─ no remediation available:
-          → ESCALATED (Leg 3: enrich ticket, notify engineer)
-            → INVESTIGATING (engineer working)
-              → RESOLVED (engineer confirms fix, alarm clears)
+  -> Detection Lambda:
+    -> cool-off check (transient? -> log, skip)
+    -> deduplication (existing? -> add Jira comment, skip)
+    -> reserve incident_key in DynamoDB (RESERVED)
+    -> create Jira incident
+    -> update DynamoDB with jira_ticket_id (DETECTED)
+    -> storm detection check
+    -> publish IncidentCreated to EventBridge (includes storm_detected flag + recovery_model)
+
+  -> Triage Lambda (EventBridge: IncidentCreated):
+    -> update DynamoDB (TRIAGING)
+    -> analyze logs, classify root cause, assess blast radius
+    -> update Jira with analysis
+    +-- storm detected:
+    |     -> publish EscalationRequired (reason: "incident-storm")
+    +-- no remediation available:
+    |     -> publish EscalationRequired (reason: "no-remediation-available")
+    +-- remediation available:
+          -> execute single remediation attempt
+          -> wait verification period
+          -> 3-point verification
+            +-- all pass:
+            |     -> determine recovery model (from IncidentCreated event)
+            |     -> trigger recovery workflow if not stateless
+            |     -> Jira: resolved (with recovery action), DynamoDB: GRACE (15-min TTL)
+            |     -> publish IncidentAutoResolved (includes recovery_model, recovery_status)
+            +-- any fail:
+                  -> publish EscalationRequired (reason: "verification-failed")
+
+  -> Escalation Lambda (EventBridge: EscalationRequired):
+    -> update DynamoDB (ESCALATED)
+    -> enrich Jira with diagnostics, logs, links, commands
+    -> notify engineer via SNS (SEV-1/SEV-2 only)
 
 ALARM recovers (OK)
-  → If OPEN/ESCALATED incident exists: collect resolution data, update Jira, close record
-  → If no matching incident: log and skip
+  -> Detection Lambda:
+    -> lookup incident_key in DynamoDB
+    -> not found -> log, skip
+    -> collect resolution-time diagnostics (recovery logs, health check)
+    -> update Jira: resolved (with resolution comment + attached logs)
+    -> delete DynamoDB record
+
+Grace period recurrence:
+  -> Detection Lambda detects GRACE record for same incident_key
+    -> reopen incident in Jira
+    -> DynamoDB: GRACE -> DETECTED (fresh 24h TTL)
+    -> publish EscalationRequired (reason: "grace-period-recurrence")
 ```
 
-Each status transition SHALL be recorded in the DynamoDB incident record and reflected as a Jira ticket comment with timestamp.
+### DynamoDB Status Values
+
+| Status | Meaning | Set By |
+|--------|---------|--------|
+| `RESERVED` | Placeholder before Jira ticket creation (race-condition guard) | Detection Lambda |
+| `DETECTED` | Incident confirmed, Jira ticket created, triage pending | Detection Lambda |
+| `TRIAGING` | Triage Lambda is actively processing | Triage Lambda |
+| `ESCALATED` | Engineer escalation in progress | Escalation Lambda |
+| `GRACE` | Auto-resolved; 15-minute recurrence detection window (TTL = resolved_at + 900s) | Triage Lambda |
 
 ---
 
-# LEG 1 — INCIDENT DETECTION & CREATION
+# LEG 1 -- INCIDENT DETECTION & CREATION
 
-Triggered when a CloudWatch alarm transitions to ALARM state. Goal: quickly confirm the alarm is real, deduplicate, and create an incident record. No human engaged yet.
+Triggered when a CloudWatch alarm transitions to ALARM state via SNS. Goal: confirm the alarm is real, deduplicate, detect storms, create Jira incident. No human engaged yet.
 
-## Functional Requirements — Leg 1
+## Functional Requirements -- Leg 1
 
 ### FR-001: Alarm Ingestion via SNS
-The system SHALL accept CloudWatch Alarm state change notifications via a shared SNS topic. Any service stack's alarms can publish to this topic.
+The Detection Lambda SHALL accept CloudWatch Alarm state change notifications via a shared SNS topic. Any service stack's alarms can publish to this topic.
 
-### FR-002: Severity Classification
-The system SHALL classify incident severity from the alarm name using convention-based pattern matching:
-- `*-high-error-rate-*` → SEV-1 (Critical)
-- `*-high-latency-*` → SEV-2 (Major)
-- `*-high-4xx-*` → SEV-3 (Minor)
+### FR-002: Severity and Recovery Model Classification (Externalized)
+The Detection Lambda SHALL classify incident severity and recovery model from the alarm name using the `severity_mapping` in `incident_config.json`:
+
+```json
+{
+  "severity_mapping": {
+    "error-rate": {"severity": "SEV-1", "recovery_model": "stateless"},
+    "latency": {"severity": "SEV-2", "recovery_model": "stateless"},
+    "4xx-errors": {"severity": "SEV-3", "recovery_model": "stateless"},
+    "queue-backlog": {"severity": "SEV-2", "recovery_model": "replay"},
+    "batch-failure": {"severity": "SEV-1", "recovery_model": "reprocess"},
+    "data-integrity": {"severity": "SEV-1", "recovery_model": "data-correction"},
+    "throttle": {"severity": "SEV-2", "recovery_model": "backlog-drain"},
+    "concurrency": {"severity": "SEV-1", "recovery_model": "backlog-drain"},
+    "dynamo-throttle": {"severity": "SEV-2", "recovery_model": "replay"},
+    "traffic": {"severity": "SEV-1", "recovery_model": "stateless"},
+    "cold-start-rate": {"severity": "SEV-2", "recovery_model": "stateless"}
+  }
+}
+```
+
+Each alarm type maps to both a severity level and a recovery model. The recovery model determines what needs to happen *after* service restoration. New mappings are added to the config file without code changes.
+
+**Golden Signals coverage**:
+
+| Golden Signal | Alarm Types | Direction |
+|---|---|---|
+| **Errors** | `error-rate`, `4xx-errors`, `batch-failure`, `data-integrity` | high |
+| **Latency** | `latency`, `cold-start-rate` | high |
+| **Saturation** | `throttle`, `concurrency`, `dynamo-throttle`, `queue-backlog` | high |
+| **Traffic** | `traffic` | low (drop detection) |
 
 ### FR-003: Service and Environment Identification
-The system SHALL extract the following metadata from the alarm name convention:
+The Detection Lambda SHALL extract metadata from the alarm name convention:
 
-`{service}-high-{type}-{stage}`
+`{service}-{high|low}-{type}-{stage}`
 
-Captured attributes SHALL include:
-- **service name** (e.g., `calculator`, `hello-world`)
-- **alarm type** (e.g., `error-rate`, `latency`, `4xx-errors`)
-- **deployment stage** (e.g., `dev`, `staging`, `prod`)
+The threshold direction (`high` or `low`) indicates whether the alarm fires on an upper or lower threshold breach:
+- `high` — metric exceeded upper threshold (errors, latency, throttles, cold starts)
+- `low` — metric dropped below lower threshold (traffic drops, invocation drops)
 
-These attributes SHALL construct the incident key and determine routing logic.
+Examples:
+- `calculator-high-error-rate-prod` — error rate exceeded threshold
+- `calculator-low-traffic-prod` — invocation count dropped below threshold
+- `calculator-high-throttle-prod` — Lambda throttles exceeded threshold
+- `calculator-high-cold-start-rate-prod` — cold start rate exceeded threshold
+
+Captured attributes: service name, alarm type, deployment stage. These construct the `incident_key` (`{service}-{alarm_type}-{stage}`).
+
+The Detection Lambda SHALL also extract from the CloudWatch Alarm SNS message:
+- **Alarm ARN** (`AlarmArn` field): full CloudWatch alarm ARN for direct linking
+- **Trigger dimensions** (`Trigger.Dimensions` array): metric dimensions including `FunctionName` (the Lambda function that triggered the alarm)
+
+The `FunctionName` dimension identifies the exact Lambda source (e.g., `calculator-api-prod`) and is propagated to Jira tickets and EventBridge events.
 
 ### FR-004: Cool-Off Stabilization Check
-The system SHALL implement a cool-off period before creating an incident to filter transient spikes.
+The Detection Lambda SHALL re-check alarm state after a configurable cool-off period to filter transient spikes.
 
-- When an ALARM event is received and no OPEN incident exists, the system SHALL re-check the alarm state after a configurable cool-off period.
-- If the alarm is still in ALARM state after cool-off, proceed with incident creation.
-- If the alarm has returned to OK during cool-off, log as transient spike and skip.
-- Cool-off periods per severity:
-  - SEV-1: 30 seconds (fast escalation for critical issues)
+- Cool-off periods per severity (from `incident_config.json`):
+  - SEV-1: 30 seconds
   - SEV-2: 60 seconds
   - SEV-3: 120 seconds
-- The cool-off check SHALL use the CloudWatch `describe-alarms` API.
+- If alarm returned to OK during cool-off, log as transient and skip.
+- If alarm still active, proceed with incident creation.
+- The cool-off check uses the CloudWatch `describe-alarms` API.
 
 ### FR-005: Incident Deduplication
-The system SHALL prevent duplicate incidents for the same active alarm.
+The Detection Lambda SHALL prevent duplicate incidents for the same active alarm.
 
-- The **incident key** (`{service}-{alarm-type}-{stage}`) is the system's primary correlation identifier. All lookups, deduplication, and lifecycle transitions SHALL use this key.
-- Check DynamoDB for an existing OPEN incident with the same key.
-- If OPEN incident exists:
-  - Do NOT create a new Jira ticket.
-  - Append a comment to the existing Jira ticket with timestamp and current alarm state.
-- If no OPEN incident exists:
-  - Create a new incident record and Jira ticket.
-- **Atomic creation**: The system SHALL use DynamoDB conditional writes (`attribute_not_exists(incident_key)` or `status = RESOLVED`) to prevent race conditions where concurrent alarm deliveries create duplicate incidents for the same key.
+- Check DynamoDB for an existing record with the same `incident_key`.
+- If record exists with `jira_ticket_id`: add comment to existing Jira ticket, skip creation.
+- If no record exists: proceed to reserve-then-create.
+- **Race condition protection**: DynamoDB conditional writes (`attribute_not_exists(incident_key)`) serialize concurrent Lambda invocations.
 
-### FR-006: Incident Record Creation
-The system SHALL create an incident record in DynamoDB with status DETECTED and a minimal Jira ticket (summary, severity, alarm details only — no logs yet). The ticket signals that automated triage is in progress.
+### FR-006: Reserve-Then-Create Pattern
+The Detection Lambda SHALL use a two-phase write to prevent duplicate Jira tickets:
 
-Jira ticket at this stage:
+1. **Reserve**: Write placeholder to DynamoDB (`status: RESERVED`, `jira_ticket_id: null`) with `attribute_not_exists(incident_key)` condition.
+2. **Create**: Create Jira incident ticket -> returns `jira_ticket_id`.
+3. **Update**: Update DynamoDB record with `jira_ticket_id`, `status: DETECTED`.
+
+**Conflict handling** (conditional write fails):
+- `RESERVED` (no jira_ticket_id):
+  - If `created_at` age > `reservation_timeout_seconds` (default: 180s): stale reservation — delete and retry reserve-then-create (one retry only).
+  - If fresh: another Lambda is creating the ticket -> exit silently.
+- `DETECTED`/`TRIAGING`/`ESCALATED` (jira_ticket_id exists): add duplicate comment to existing Jira ticket -> exit.
+- `GRACE` (jira_ticket_id exists): handle per grace period rules (FR-016).
+
+**Jira creation failure**: delete reserved DynamoDB record, log error, rely on SNS retry or DLQ.
+
+### FR-007: Incident Storm Detection
+The Detection Lambda SHALL detect incident storms (dependency failure causing many alarms simultaneously).
+
+- Count DynamoDB records where `created_at > now - storm_window_seconds` (via GSI).
+- If count exceeds `storm_threshold` (from `incident_config.json`):
+  - `storm_detected = true`
+  - Incident is still created (Jira ticket + DynamoDB record)
+  - IncidentCreated event includes `storm_detected: true` and `active_incident_count`
+  - Triage Lambda skips automated remediation and escalates directly.
+
+Default thresholds (configurable): `storm_threshold: 5`, `storm_window_seconds: 120`.
+
+### FR-008: Jira Incident Creation
+The Detection Lambda SHALL create a Jira incident ticket with:
+
 - **Summary**: `[SEV-X] {service} ({stage}): {alarm description}`
-- **Priority**: SEV-1→Highest, SEV-2→High, SEV-3→Medium
+- **Priority**: SEV-1->Highest, SEV-2->High, SEV-3->Medium
 - **Labels**: `incident`, `automated`, `{service}`, `{stage}`
-- **Description**: "Incident detected. Automated triage in progress..."
-- **Status comment**: "Incident detected at {timestamp}. Automated analysis starting."
+- **Description**: Includes incident metadata with:
+  - Lambda function name (from alarm trigger dimensions, e.g., `calculator-api-prod`)
+  - Alarm ARN (direct link to CloudWatch alarm)
+  - "Incident detected. Automated triage in progress..."
+- **Custom field**: `incident_key` for correlation
+- **Comment**: "Incident detected at {timestamp}. Source: {function_name}. Automated analysis starting."
 
-### FR-007: Scalable Onboarding
-New services SHALL onboard by adding a single alarm action pointing to the shared SNS topic. No changes to the Incident Manager Lambda required.
+### FR-009: EventBridge Event Publishing
+The Detection Lambda SHALL publish `IncidentCreated` to EventBridge after successful incident creation:
+
+```json
+{
+  "source": "incident-manager",
+  "detail-type": "IncidentCreated",
+  "detail": {
+    "incident_key": "payments-error-rate-prod",
+    "jira_ticket_id": "INC-142",
+    "service": "payments",
+    "function_name": "payments-api-prod",
+    "stage": "prod",
+    "severity": "SEV-1",
+    "recovery_model": "stateless",
+    "storm_detected": false,
+    "timestamp": "2026-03-30T10:15:00Z"
+  }
+}
+```
+
+### FR-010: Scalable Onboarding
+New services SHALL onboard by adding a single alarm action pointing to the shared SNS topic. No changes to the incident manager Lambdas required.
 
 ---
 
-# LEG 2 — AUTOMATED TRIAGE & SELF-HEALING
+# LEG 2 -- AUTOMATED TRIAGE & SELF-HEALING
 
-Triggered immediately after Leg 1 creates an incident. Goal: analyze the problem, classify root cause, assess blast radius, attempt self-healing. If resolved, close. If not, prepare the ticket for human escalation.
+Triggered by EventBridge `IncidentCreated` event. Goal: analyze the problem, classify root cause, assess blast radius, attempt self-healing. If resolved, transition to GRACE. If not, escalate.
 
-## Functional Requirements — Leg 2
+## Functional Requirements -- Leg 2
 
-### FR-008: Log Collection and Error Analysis
-The system SHALL pull recent logs from the affected service and produce structured analysis.
+### FR-011: Log Collection and Error Analysis
+The Triage Lambda SHALL collect error logs from the affected service and produce structured analysis.
 
-**Bounded analysis window**: Log analysis SHALL be limited to a fixed time window (default: 15 minutes) and a maximum of 500 log events per query to control processing cost and Lambda execution time. If the log volume exceeds the limit, the system SHALL analyze the most recent events and note the truncation in the error summary.
+**Bounded analysis** (from `incident_config.json`): `window_minutes: 15`, `max_events: 500`. If log volume exceeds the limit, analyze most recent events and note truncation.
+
+The log group is derived from the Lambda function name (`/aws/lambda/{function_name}`) when available from alarm trigger dimensions, ensuring logs are collected from the exact source Lambda.
 
 Analysis outputs:
-- **Error summary**: Total error count, errors grouped by type, top error messages
-- **Error timeline**: Error rate over 1-minute buckets to show trend (spike vs sustained)
-- **Affected operations**: Which API endpoints/operations are failing (from `path` and `operation` log fields)
-- **Affected users**: Count of distinct `user_id` values in error logs (from enhanced middleware logging)
-- **Sample errors**: Up to 5 full error log entries with stack traces for representative failures
+- **Error summary**: Total count, errors grouped by type, top error messages
+- **Error timeline**: Error rate over 1-minute buckets (spike vs sustained)
+- **Affected operations**: Failing API endpoints/operations
+- **Affected users**: Distinct `user_id` count from error logs
+- **Sample errors**: Up to 5 full error entries with stack traces
+- **Sample payloads**: Up to 5 error-triggering request/event payloads extracted from structured logs (the input event or request body that caused each failure). Requires source Lambdas to log incoming events via the `@observe` decorator or structured logging.
 
-### FR-009: Root Cause Classification
-The system SHALL analyze the collected logs and classify the probable root cause:
+### FR-012: Root Cause Classification (Externalized Rules)
+The Triage Lambda SHALL classify root cause using rules from `incident_config.json`:
 
-| Pattern Detected | Classification | Confidence |
-|-----------------|---------------|------------|
-| Single error type dominates (>80%) | Specific bug (e.g., DivisionByZeroError) | High |
-| ImportError / SyntaxError in logs | Bad deployment | High |
-| No application errors, but high latency | Performance degradation / cold starts | Medium |
-| Mixed error types after recent deploy | Bad deployment (broad failure) | Medium |
-| Sudden spike then stabilizing | Transient load spike | Medium |
-| Throttling errors (429) | Rate limit / capacity | High |
-| Auth errors (401/403) dominating | Authentication/authorization issue | High |
-| No clear pattern | Unknown — requires investigation | Low |
-
-The classification SHALL be included in the Jira ticket and incident record.
-
-### FR-010: Blast Radius Assessment
-The system SHALL assess the impact of the incident:
-
-- **Affected endpoints**: Which operations are returning errors
-- **Affected users**: Distinct user count from error logs
-- **Error rate**: Current vs baseline (percentage of requests failing)
-- **Duration**: How long the alarm has been active
-
-This assessment SHALL be summarized as: `Impact: {X} users affected, {Y}% error rate on {endpoints} for {duration}`
-
-### FR-011: Automated Remediation Attempt
-The system SHALL attempt self-healing based on the root cause classification.
-
-**Single attempt constraint**: The system SHALL execute at most ONE remediation attempt per incident. The `remediation_result` field in DynamoDB tracks whether remediation has been attempted. If remediation has already been attempted (regardless of outcome), the system SHALL NOT retry and SHALL escalate to Leg 3. This prevents automation loops and uncontrolled infrastructure changes.
-
-**Step 1 — Remediation Lookup:**
-- The system SHALL evaluate the root cause classification against a remediation registry (configuration mapping root cause → action).
-- If no remediation exists for the classification, skip to escalation (Leg 3) with Jira comment: "No automated remediation available for {classification}."
-
-**Step 2 — Execute Remediation:**
-- Update incident status to REMEDIATING.
-- Add Jira comment: "Attempting remediation: {action description}."
-- Execute the remediation action (see remediation catalog below).
-- Log the action taken, start time, and any output/errors.
-
-**Step 3 — Verification Wait:**
-- After remediation executes, the system SHALL wait a verification period for the fix to take effect:
-  - SEV-1: 60 seconds
-  - SEV-2: 90 seconds
-  - SEV-3: 120 seconds
-
-**Step 4 — Post-Remediation Verification:**
-The system SHALL perform a multi-point verification to confirm the issue is resolved:
-
-1. **Alarm state check**: Query CloudWatch `describe-alarms` API to verify alarm has returned to OK.
-2. **Health check**: Execute endpoint health checks against the affected service (same logic as `health-check.sh`).
-3. **Error rate check**: Pull the last 2 minutes of logs and verify error count is below the alarm threshold.
-
-**Verification outcomes:**
-- All three checks pass → remediation succeeded → proceed to auto-resolution (FR-012).
-- Any check fails → remediation failed → proceed to escalation (Leg 3) with Jira comment documenting which checks failed.
-
-**Remediation Catalog:**
-
-| Root Cause Classification | Remediation Action | Description |
-|--------------------------|-------------------|-------------|
-| Bad deployment (ImportError/SyntaxError) | Lambda version rollback | Revert to the previous published Lambda version using `update-function-configuration` to restore last known good code |
-| Performance degradation / cold starts | Lambda memory increase | Temporarily increase Lambda memory allocation by one tier (e.g., 512→1024 MB) to reduce cold start and execution time |
-| Rate limit / capacity (429s) | Concurrency increase | Increase Lambda reserved concurrency and/or API Gateway throttle limits |
-| Specific bug (single error type) | No auto-remediation | Classification logged; requires code fix — escalate to engineer |
-| Authentication/authorization issue | No auto-remediation | Requires Cognito/IAM investigation — escalate to engineer |
-| Unknown | No auto-remediation | Escalate to engineer |
-
-### FR-012: Auto-Resolution Process
-When post-remediation verification succeeds (all three checks pass), the system SHALL execute the full auto-resolution workflow:
-
-**Step 1 — Collect Resolution Evidence:**
-- Recovery timestamp
-- Incident duration (detection to resolution)
-- Remediation action that was taken
-- Post-remediation verification results (alarm state, health check, error rate)
-- Resolution window logs: last 5 minutes of logs showing the error rate dropping to normal
-
-**Step 2 — Update Incident Record:**
-- Set status to AUTO-RESOLVED
-- Set `resolved_at` timestamp
-- Set `remediation_result` to "succeeded"
-- Set `remediation_action` to the action taken (e.g., "lambda-version-rollback")
-
-**Step 3 — Update Jira Ticket:**
-Add a resolution comment containing:
-```
-=== INCIDENT AUTO-RESOLVED ===
-
-Resolution: Automated remediation successful
-Action taken: {remediation action description}
-Duration: {X minutes Y seconds}
-Resolved at: {timestamp}
-
-Post-recovery verification:
-  ✓ Alarm state: OK
-  ✓ Health check: All endpoints responding (X/X passed)
-  ✓ Error rate: {current}% (below threshold of {threshold}%)
-
-Resolution logs attached: resolution-logs-{timestamp}.txt
+```json
+{
+  "classification_rules": [
+    {"pattern": "import_or_syntax_error", "classification": "bad-deployment", "confidence": "high"},
+    {"pattern": "single_error_dominant", "classification": "specific-bug", "confidence": "high"},
+    {"pattern": "throttling_errors", "classification": "rate-limit", "confidence": "high"},
+    {"pattern": "auth_errors", "classification": "auth-issue", "confidence": "high"},
+    {"pattern": "high_latency_no_errors", "classification": "performance-degradation", "confidence": "medium"},
+    {"pattern": "mixed_errors_recent_deploy", "classification": "bad-deployment", "confidence": "medium"},
+    {"pattern": "spike_then_stable", "classification": "transient-spike", "confidence": "medium"},
+    {"pattern": "throttling_with_concurrency", "classification": "concurrency-exhaustion", "confidence": "high"},
+    {"pattern": "dynamo_throttle_pattern", "classification": "dynamo-capacity-exceeded", "confidence": "high"},
+    {"pattern": "traffic_drop", "classification": "upstream-outage", "confidence": "medium"},
+    {"pattern": "cold_start_spike", "classification": "cold-start-storm", "confidence": "medium"}
+  ]
+}
 ```
 
-Attach resolution logs showing the error rate dropping after remediation.
+New classification rules added to config without code changes. Classification is deterministic, reproducible, and auditable.
 
-**Step 4 — Close Jira Ticket:**
-- Transition the Jira ticket to a resolved/closed state (if workflow supports it).
-- If workflow transition is not available, add the `auto-resolved` label.
+### FR-013: Blast Radius Assessment
+The Triage Lambda SHALL assess incident impact:
 
-**Step 5 — No Engineer Notification:**
-- AUTO-RESOLVED incidents SHALL NOT trigger SNS notifications to engineers.
-- The resolved Jira ticket serves as the audit trail.
+- Affected endpoints, affected users (distinct count), error rate (current vs baseline), duration.
+- Summary format: `Impact: {X} users affected, {Y}% error rate on {endpoints} for {duration}`
 
-**Step 6 — Monitoring Grace Period:**
-- After auto-resolution, the system SHALL retain the incident key in a "grace" state for 15 minutes.
-- If the same alarm fires again within the grace period, the system SHALL:
-  - Reopen the incident (not create a new one).
-  - Skip remediation (already tried).
-  - Escalate directly to Leg 3 with Jira comment: "Incident recurred after auto-remediation. Previous fix was not durable. Escalating to engineer."
-  - This prevents remediation loops for flapping alarms.
+### FR-014: Automated Remediation (Externalized Catalog, Multi-Service)
+The Triage Lambda SHALL attempt self-healing based on root cause classification and service type.
 
-### FR-013: Incident Status Updates
-Every step in Leg 2 SHALL update the incident status and add a timestamped comment to the Jira ticket:
+**Single attempt constraint**: At most ONE remediation attempt per incident. This prevents automation loops.
 
-- `DETECTED → TRIAGING`: "Analyzing logs... collecting error data."
-- `TRIAGING → REMEDIATING`: "Root cause classified as {classification} ({confidence}). Attempting remediation: {action}."
-- `REMEDIATING → VERIFYING`: "Remediation executed. Waiting {X}s for verification..."
-- `VERIFYING → AUTO-RESOLVED`: "All verification checks passed. Incident auto-resolved. Duration: {X}m."
-- `VERIFYING → ESCALATED`: "Verification failed ({which checks}). Escalating to support engineer."
-- `TRIAGING → ESCALATED` (no remediation available): "No automated remediation available for {classification}. Escalating."
-- `AUTO-RESOLVED → ESCALATED` (recurrence within grace period): "Incident recurred after auto-remediation. Fix not durable. Escalating."
+**Triage timeout guardrail**: If triage elapsed time exceeds `triage_timeout_seconds` (default: 120s from config), skip remaining steps (remediation, verification, recovery) and escalate with reason `"triage-timeout"`. Analysis work already done is preserved in Jira. This prevents Lambda timeout from silently losing progress.
+
+**Storm override**: When `storm_detected = true`, skip remediation entirely and escalate with reason `"incident-storm"`. Analysis still runs -- engineers receive full diagnostics.
+
+**Service type detection**: The `service_type` is derived from the CloudWatch alarm's `Trigger.Namespace` at detection time and propagated through the IncidentCreated event:
+
+| Namespace | Service Type |
+|-----------|-------------|
+| `AWS/Lambda`, `Custom/Lambda` | `lambda` |
+| `AWS/ApiGateway` | `api-gateway` |
+| `AWS/ES`, `AWS/OpenSearch` | `elasticsearch` |
+
+**Skill-file-driven remediation**: Each service type has a JSON skill file (`src/services/remediation/skills/{service_type}.json`) that describes its available remediation actions, the integration method to call, and what parameters to extract from the resource context. A generic `RemediationEngine` reads these skill files and dispatches remediation. Adding a new service type requires only a new skill file and the corresponding repository methods -- zero engine changes.
+
+**Remediation lookup**: Match `service_type` and `root_cause` against the nested `remediation_catalog` in `incident_config.json`:
+
+```json
+{
+  "remediation_catalog": {
+    "lambda": {
+      "bad-deployment": {"action": "lambda-version-rollback"},
+      "performance-degradation": {"action": "lambda-memory-increase"},
+      "rate-limit": {"action": "increase-concurrency"},
+      "concurrency-exhaustion": {"action": "increase-concurrency"}
+    },
+    "api-gateway": {
+      "bad-deployment": {"action": "apigw-deployment-rollback"},
+      "rate-limit": {"action": "apigw-throttle-increase"}
+    },
+    "elasticsearch": {
+      "performance-degradation": {"action": "opensearch-scale-up"},
+      "storage-exhaustion": {"action": "opensearch-storage-increase"}
+    }
+  }
+}
+```
+
+No catalog match for the service_type + root_cause -> publish `EscalationRequired` with reason `"no-remediation-available"`.
+
+**Remediation actions**:
+
+| Service Type | Action | Description |
+|-------------|--------|-------------|
+| `lambda` | `lambda-version-rollback` | Revert Lambda to previous published version |
+| `lambda` | `lambda-memory-increase` | Increase memory by one tier (e.g., 512->1024 MB) |
+| `lambda` | `increase-concurrency` | Increase Lambda reserved concurrency |
+| `api-gateway` | `apigw-deployment-rollback` | Revert API Gateway stage to previous deployment |
+| `api-gateway` | `apigw-throttle-increase` | Increase API Gateway stage throttle limits |
+| `elasticsearch` | `opensearch-scale-up` | Scale up OpenSearch instance type or count |
+| `elasticsearch` | `opensearch-storage-increase` | Increase OpenSearch EBS volume size |
+
+**Verification wait** (from `incident_config.json`): SEV-1: 60s, SEV-2: 90s, SEV-3: 120s.
+
+**3-point verification**:
+1. Alarm state check (CloudWatch `describe-alarms` -> OK)
+2. Health check (endpoint health check against affected service)
+3. Error rate check (last 2 min of logs, error count below threshold)
+
+All pass -> auto-resolution (FR-015). Any fail -> publish `EscalationRequired` with reason `"verification-failed"`.
+
+New service types added via skill files + repository methods without engine changes. New remediation strategies for existing service types added to config without code changes.
+
+### FR-015: Auto-Resolution
+When 3-point verification passes, the Triage Lambda SHALL:
+
+1. Collect resolution evidence (duration, action taken, verification results, resolution logs)
+2. Determine recovery model (from IncidentCreated event detail)
+3. If recovery model is not `stateless`: trigger recovery workflow (FR-015a)
+4. Update Jira ticket with resolution comment, recovery action, and attach resolution logs
+5. Transition Jira ticket to resolved status
+6. Update DynamoDB: `status -> GRACE`, `ttl = resolved_at + grace_period_seconds` (default: 900s / 15 min)
+7. Publish `IncidentAutoResolved` to EventBridge (includes `recovery_model` and `recovery_status`)
+8. No engineer notification for auto-resolved incidents
+
+### FR-015a: Recovery Model Classification and Workflow Triggering
+The Triage Lambda SHALL classify incidents by recovery model and trigger appropriate recovery workflows after successful service remediation.
+
+**Recovery models**:
+
+| Recovery Model | What Needs Fixing | Example Failure | Recovery Action |
+|----------------|-------------------|-----------------|-----------------|
+| `stateless` | Nothing -- just restore the service | API error spike, deployment bug | No recovery action |
+| `replay` | Replay lost events/messages | DLQ backlog, consumer crash | Trigger DLQ replay workflow |
+| `reprocess` | Rerun failed jobs/workflows | ETL failure, batch settlement | Trigger batch rerun workflow |
+| `data-correction` | Repair incorrect data | Duplicate transactions, partial updates | Trigger reconciliation workflow |
+| `backlog-drain` | Scale consumers to drain queue | Traffic spike, dependency slowdown | Trigger consumer scaling |
+
+**Key design principle**: The incident system is a control plane for recovery. It orchestrates but NEVER processes business data itself. Impacted records remain in their source systems (DLQs, retry queues, staging tables, event logs).
+
+**Recovery catalog** (externalized in `incident_config.json`):
+
+```json
+{
+  "recovery_catalog": {
+    "replay": {
+      "type": "step_function",
+      "workflow_arn_env": "REPLAY_DLQ_WORKFLOW_ARN",
+      "description": "Replay unprocessed messages from DLQ"
+    },
+    "reprocess": {
+      "type": "step_function",
+      "workflow_arn_env": "REPROCESS_BATCH_WORKFLOW_ARN",
+      "description": "Rerun failed batch job or ETL pipeline"
+    },
+    "data-correction": {
+      "type": "step_function",
+      "workflow_arn_env": "RECONCILIATION_WORKFLOW_ARN",
+      "description": "Trigger data reconciliation workflow"
+    },
+    "backlog-drain": {
+      "type": "lambda",
+      "function_name_env": "BACKLOG_DRAIN_FUNCTION_NAME",
+      "description": "Scale consumers to drain accumulated backlog"
+    }
+  }
+}
+```
+
+**Recovery workflow triggering**:
+- `type: step_function`: Start Step Functions execution with incident context as input
+- `type: lambda`: Invoke Lambda asynchronously with incident context as payload
+- Workflow ARNs / function names are passed via Lambda environment variables (referenced by `*_env` keys in config)
+- Recovery trigger result (execution ARN, status) recorded in Jira comment
+- Recovery workflow failure does NOT block auto-resolution -- it is logged in Jira and the incident is still resolved
+
+**Recovery workflow idempotency**: All recovery triggers SHALL include idempotency keys in the payload: `incident_key`, `jira_ticket_id`, and a unique `execution_id` (UUID). Recovery workflows MUST detect duplicate executions using these keys to prevent double-replay, double-reprocessing, or duplicate data corrections on triage retries. For Step Functions, the `execution_id` is used as the execution name for built-in deduplication.
+
+**Idempotency ownership boundary**: The incident system (provider) is responsible for generating and passing idempotency keys. Recovery workflow owners (consumers) are responsible for implementing dedup using their runtime's native mechanism — Step Functions uses execution name dedup; Lambda-based workflows should check against their own state store (e.g., DynamoDB conditional write on execution_id). There is no centralized idempotency library; each recovery workflow uses the mechanism natural to its runtime.
+
+**Where impacted records live** (NOT in the incident system):
+
+| Failure Type | Where Impacted Records Live |
+|-------------|----------------------------|
+| Queue processing failure | DLQ / message queue |
+| Batch processing failure | Job staging tables / checkpoints |
+| Streaming pipeline failure | Event log / Kafka / Kinesis |
+| Partial transaction failure | Operational database |
+| Integration failure | Retry queue |
+
+New recovery workflows are added to the catalog without code changes.
+
+### FR-016: Grace Period Recurrence Detection
+After auto-resolution, the DynamoDB record transitions to `GRACE` status with 15-minute TTL.
+
+If the same alarm fires again while a `GRACE` record exists:
+- Detection Lambda skips cool-off and remediation
+- Reopens incident in Jira
+- Updates DynamoDB: `GRACE -> DETECTED` with fresh 24-hour TTL
+- Publishes `EscalationRequired` with reason `"grace-period-recurrence"`
+
+This prevents remediation loops for flapping alarms.
+
+### FR-017: Jira Status Updates
+Every processing step in Leg 2 SHALL update Jira with timestamped comments:
+
+- Triage started: "Analyzing logs... collecting error data."
+- Analysis complete: "Root cause classified as {classification} ({confidence}). Blast radius: {summary}."
+- Remediation started: "Attempting remediation: {action}."
+- Verification started: "Remediation executed. Waiting {X}s for verification..."
+- Auto-resolved: "All verification checks passed. Incident auto-resolved. Duration: {X}m."
+- Verification failed: "Verification failed ({which checks}). Escalating."
+- No remediation: "No automated remediation available for {classification}. Escalating."
+- Storm escalation: "Incident storm detected ({N} active incidents). Skipping automation, escalating."
 
 ---
 
-# LEG 3 — ENGINEER ESCALATION & RESOLUTION
+# LEG 3 -- ENGINEER ESCALATION & RESOLUTION
 
-Triggered when Leg 2 cannot resolve the incident. Goal: enrich the Jira ticket with all diagnostic data and analysis so the support engineer can act immediately.
+Triggered by EventBridge `EscalationRequired` event. Goal: enrich Jira ticket with all diagnostics so the engineer can act immediately.
 
-## Functional Requirements — Leg 3
+## Functional Requirements -- Leg 3
 
-### FR-014: Jira Ticket Enrichment
-The system SHALL update the Jira ticket with full diagnostic context. The support engineer SHALL NOT need to download logs or run scripts to begin investigation.
+### FR-018: Jira Ticket Enrichment
+The Escalation Lambda SHALL update the Jira ticket with full diagnostic context. The engineer SHALL NOT need to download logs or run scripts to begin investigation.
 
-**Ticket description updated with:**
-- Incident metadata (key, service, stage, severity, alarm, duration)
+**Ticket description updated with**:
+- Incident metadata (key, service, **Lambda function name**, stage, severity, alarm ARN, duration)
+- Escalation reason (verification-failed, no-remediation-available, incident-storm, grace-period-recurrence)
 - Root cause classification and confidence level
-- Blast radius assessment (users affected, error rate, endpoints)
+- Blast radius assessment
 - Remediation actions attempted and outcomes
+- **Sample error-triggering payloads** (up to 5 request/event bodies that caused failures)
 
-**Attached to the ticket:**
+**Attached to the ticket**:
 - Error log extract (`error-logs-{timestamp}.txt`)
+- Error-triggering payloads (`error-payloads-{timestamp}.txt`) — request/event bodies from failed invocations
 - Top failing request traces (`request-traces-{timestamp}.txt`)
 - Error timeline and trend data
 
-**Links included:**
+**Links included**:
 - CloudWatch dashboard (direct URL for the service)
 - X-Ray trace console (filtered by service and time window)
-- CloudWatch Logs Insights (pre-built query, ready to run in console)
+- CloudWatch Logs Insights (pre-built query)
 - Runbook: `docs/runbooks/{service}-debug.md`
 
-**Investigation commands (copy-paste ready):**
+**Investigation commands (copy-paste ready)**:
 ```
 ./scripts/incident/download-logs.sh --stage {stage} --service {service} --minutes 30
 ./scripts/incident/trace-lookup.sh --stage {stage} --correlation-id {sample-trace-id}
 ./scripts/incident/health-check.sh --stage {stage}
 ```
 
-### FR-015: Engineer Notification
-The system SHALL send SNS notification for SEV-1 and SEV-2 incidents only, after Leg 2 has failed to resolve:
+### FR-019: Engineer Notification
+The Escalation Lambda SHALL send SNS notification for SEV-1 and SEV-2 incidents only:
 
 - Incident key and severity
+- Escalation reason
 - Root cause classification
 - Blast radius summary
-- Jira ticket link (with all diagnostics already attached)
+- Jira ticket link (with diagnostics already attached)
 - Time elapsed since alarm triggered
 
-SEV-3 incidents that reach Leg 3 are tracked via enriched Jira ticket only (no notification).
+SEV-3 incidents are tracked via enriched Jira ticket only (no notification).
 
-### FR-016: Resolution Tracking
-The system SHALL process incident resolution (manual or alarm recovery):
+### FR-020: Resolution Tracking (Alarm Recovery)
+The Detection Lambda SHALL process alarm recovery (OK state):
 
-**On alarm recovery (OK state):**
-- Locate corresponding OPEN/ESCALATED incident via incident key
-- Collect resolution-time diagnostics:
-  - Recovery timestamp and incident duration
-  - Post-recovery health check result
-  - Resolution window logs (last 5 minutes before recovery)
-- Update Jira ticket with resolution comment and attached resolution logs
-- Update DynamoDB record: status → RESOLVED, set `resolved_at`
+1. Lookup `incident_key` in DynamoDB -> not found -> log, skip
+2. Collect resolution-time diagnostics:
+   - Recovery logs (recent logs around state change)
+   - Health check (confirm alarm state is OK)
+3. Update Jira ticket: resolved (with resolution comment + attached recovery logs)
+4. Delete DynamoDB record immediately
 
-**If no matching OPEN incident exists:**
-- Log and skip (e.g., transient spike filtered by cool-off)
+Jira retains the full audit trail. DynamoDB record is removed on resolution.
 
 ---
 
 # SHARED REQUIREMENTS
 
-## Incident Registry — DynamoDB Table
+## DynamoDB Correlation Table
 
-Table name: `incident-registry-{stage}`
+**Design principle**: DynamoDB is a correlation and idempotency store only. Jira is the system of record. Lambdas delete DynamoDB records on resolution; historical data lives in Jira.
 
-| Attribute | Description |
-|-----------|-------------|
-| `incident_key` | PK — unique key from `{service}-{alarm-type}-{stage}` |
-| `incident_id` | Generated ID (e.g., `INC-20260330-calculator-abc123`) |
-| `service` | Affected service name |
-| `stage` | Deployment stage |
-| `severity` | SEV-1, SEV-2, or SEV-3 |
-| `alarm_name` | Full CloudWatch alarm name |
-| `alarm_type` | Extracted alarm type (error-rate, latency, 4xx-errors) |
-| `status` | DETECTED → TRIAGING → REMEDIATING → VERIFYING → AUTO-RESOLVED / ESCALATED → RESOLVED |
-| `root_cause` | Classification from FR-009 |
-| `blast_radius` | Impact assessment from FR-010 |
-| `jira_ticket` | Jira ticket key (e.g., ASD-42) |
-| `error_summary` | Log analysis results |
-| `remediation_result` | not_attempted / attempted / succeeded / failed |
-| `remediation_action` | What was attempted (e.g., "lambda-restart") |
-| `created_at` | Detection timestamp |
-| `escalated_at` | When escalated to engineer (null if auto-resolved) |
-| `resolved_at` | Resolution timestamp |
-| `ttl` | Expiration timestamp for automatic cleanup of resolved records |
+**Table**: `incident_correlation`
+**Partition key**: `incident_key`
+
+| Attribute | Type | Purpose |
+|-----------|------|---------|
+| `incident_key` | String (PK) | Correlation key: `{service}-{alarm_type}-{stage}` |
+| `jira_ticket_id` | String | Jira ticket key (e.g., `INC-142`); null during RESERVED |
+| `severity` | String | SEV-1, SEV-2, or SEV-3 |
+| `status` | String | `RESERVED`, `DETECTED`, `TRIAGING`, `ESCALATED`, `GRACE` |
+| `created_at` | String (ISO 8601) | When the incident was created |
+| `ttl` | Number (epoch) | Auto-expiry; see TTL rules below |
+
+**GSI**: `created_at-index` (partition key: fixed `"ALL"`, sort key: `created_at`) -- enables storm detection time-range queries.
+
+**TTL rules**:
+
+| Status | TTL Value | Purpose |
+|--------|-----------|---------|
+| `RESERVED`, `DETECTED`, `TRIAGING`, `ESCALATED` | created_at + 24 hours | Auto-cleanup if alarm never recovers |
+| `GRACE` | resolved_at + 900 seconds (15 min) | Recurrence window after auto-resolution |
+
+- Active record TTL is set at creation and never updated.
+- On auto-resolution, record transitions to `GRACE` with TTL = resolved_at + 900s.
+- On manual resolution (alarm OK recovery), the DynamoDB record is deleted immediately.
+- No record is retained beyond its TTL; Jira is the audit trail.
+
+## EventBridge Event Contracts
+
+| Event | Publisher | Consumer | Trigger |
+|-------|-----------|----------|---------|
+| `IncidentCreated` | Detection Lambda | Triage Lambda | New incident needs analysis |
+| `EscalationRequired` | Triage Lambda | Escalation Lambda | Self-healing failed or unavailable |
+| `IncidentAutoResolved` | Triage Lambda | (logged, no consumer) | Self-healing succeeded; audit trail |
+
+Events carry `incident_key`, `jira_ticket_id`, and minimal metadata. Consuming Lambdas read full state from Jira and DynamoDB.
+
+`EscalationRequired` includes a `reason` field with valid values: `verification-failed`, `no-remediation-available`, `incident-storm`, `grace-period-recurrence`, `triage-timeout`.
+
+## Externalized Configuration
+
+All operational tuning lives in `incident_config.json`, loaded once at Lambda cold start:
+
+| Config | Purpose | Why Externalized |
+|--------|---------|-----------------|
+| `severity_mapping` | Alarm type -> {severity, recovery_model} | Teams reclassify and assign recovery strategies without code changes |
+| `cool_off_seconds` | Per-severity cool-off periods | Operations tunes based on alarm behavior |
+| `classification_rules` | Log pattern -> root cause | Refined as new incident patterns emerge |
+| `remediation_catalog` | Root cause -> action | New automation strategies added over time |
+| `recovery_catalog` | Recovery model -> workflow | New recovery workflows added as systems grow |
+| `storm_detection` | Threshold + window | Adjusted as system grows |
+| `log_analysis` | Window + max events | Cost and performance tuning |
+| `reservation_timeout_seconds` | Max age for RESERVED records before reclaim | Tuned to match Detection Lambda timeout |
+| `triage_timeout_seconds` | Max triage duration before forced escalation | Tuned based on observed triage durations |
+| `grace_period_seconds` | Recurrence window | Operations adjusts based on experience |
+| `verification_wait_seconds` | Per-severity wait | Tuned per severity level |
+| `correlation_ttl_hours` | DynamoDB active record TTL | Adjusted based on alarm recovery patterns |
+
+Workflow logic (state transitions, orchestration, verification, reserve-then-create) stays in code.
+
+---
 
 ## Non-Functional Requirements
 
 ### NFR-001: Observability
-The Incident Manager Lambda SHALL use the standard `@observe` decorator and emit structured logs. Every log entry during incident processing SHALL include the `incident_key` as the primary correlation identifier, enabling end-to-end tracing of an incident across all three legs.
+All three Lambdas SHALL use the `@observe` decorator with `context_kwarg_keys` for domain context propagation. Every log entry SHALL include `incident_key` as the primary correlation identifier.
 
 Required structured log fields:
-- `incident_key` — primary correlation identifier (present in ALL log entries)
-- `incident_status` — current status at time of log entry
-- `processing_leg` — 1, 2, or 3
+- `incident_key` -- primary correlation identifier (present in ALL log entries)
 - `service` and `stage`
 - `severity`
-- `cool_off_result` — passed / filtered (Leg 1)
-- `dedup_result` — new / duplicate / atomic_conflict (Leg 1)
-- `root_cause` and `root_cause_confidence` (Leg 2)
-- `remediation_action` and `remediation_result` (Leg 2)
-- `jira_ticket` — Jira ticket key
-- `escalation_reason` — why escalated, if applicable (Leg 3)
+- `jira_ticket_id` -- Jira ticket key
+- Processing-leg-specific fields:
+  - Leg 1: `cool_off_result`, `dedup_result`, `storm_detected`
+  - Leg 2: `root_cause`, `root_cause_confidence`, `remediation_action`, `remediation_result`
+  - Leg 3: `escalation_reason`
 
 ### NFR-002: Security
-Jira API credentials SHALL be stored in AWS Secrets Manager (`incident-manager/jira-credentials`) and never in code, config, or environment variables. The Lambda IAM role SHALL follow least-privilege.
+Jira API credentials SHALL be stored in AWS Secrets Manager (`incident-manager/jira-credentials`) and never in code, config, or environment variables. Each Lambda IAM role SHALL follow least-privilege (scoped to only the AWS resources it needs).
 
 ### NFR-003: Reliability
-Failures in any single step (Jira, log collection, SNS, remediation) SHALL NOT prevent other steps from executing. Each step is independent and failures are logged with the incident.
+Failure in any processing step (Jira, log collection, SNS, remediation) SHALL NOT prevent other steps from executing. External integration methods return None/False on failure -- callers decide how to proceed. Each pipeline leg runs in its own Lambda with independent failure boundaries.
 
 ### NFR-004: Architecture Compliance
-The Incident Manager Lambda SHALL follow the platform's hexagonal architecture (handlers → services → domain → repositories → DTOs) and use the shared middleware layer.
+All three Lambdas SHALL follow the platform's hexagonal architecture (handlers -> services -> models -> repositories) and use the shared middleware layer. Because the system is SNS/EventBridge-triggered (not HTTP), there is no DTO layer; input validation is performed inline in model factories.
 
 ### NFR-005: Idempotent Processing
-Duplicate SNS deliveries SHALL NOT create duplicate incidents. Deduplication enforced via the incident registry in DynamoDB using the incident key and atomic conditional writes.
+Duplicate SNS deliveries and EventBridge retries SHALL NOT create duplicate incidents or corrupt state. DynamoDB conditional writes and the reserve-then-create pattern provide the primary idempotency mechanism.
 
 ### NFR-006: Failure Capture and Replay
-If the Incident Manager Lambda fails to process an alarm event (unhandled exception, timeout, or dependency failure), the event SHALL NOT be lost.
+Failed events SHALL NOT be lost:
 
-- The SNS subscription SHALL be configured with a Dead Letter Queue (SQS DLQ).
-- Failed events SHALL be retained in the DLQ for manual or automated replay.
-- The DLQ depth SHALL be monitored with a CloudWatch alarm to alert on processing failures.
-- A replay mechanism SHALL allow re-processing of DLQ events (manual trigger or scheduled).
+- SNS subscription: SQS DLQ for Detection Lambda failures
+- EventBridge: built-in retry (up to 24h) + DLQ for Triage/Escalation Lambda failures
+- DLQ depth monitored with CloudWatch alarm
+- Replay mechanism for manual or automated DLQ reprocessing
 
-### NFR-007: Operational Metrics and Telemetry
-The Incident Manager SHALL emit custom CloudWatch metrics to monitor system effectiveness:
+### NFR-007: Operational Metrics
+All three Lambdas SHALL emit custom CloudWatch metrics (via `@observe` decorator) to monitor system effectiveness:
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `incidents_created_total` | Counter | Total incidents created, by severity and service |
-| `incidents_auto_resolved_total` | Counter | Incidents resolved by automated remediation |
-| `incidents_escalated_total` | Counter | Incidents escalated to engineers |
-| `incidents_filtered_total` | Counter | Transient spikes filtered by cool-off |
-| `incidents_deduplicated_total` | Counter | Duplicate alarms suppressed |
-| `remediation_attempts_total` | Counter | Remediation attempts, by action and outcome |
-| `incident_detection_to_resolution_ms` | Histogram | Time from detection to resolution (auto or manual) |
-| `incident_detection_to_escalation_ms` | Histogram | Time from detection to engineer escalation |
-| `log_analysis_duration_ms` | Histogram | Time spent on log analysis |
-| `jira_api_duration_ms` | Histogram | Jira API call latency |
+| `detection_total` | Counter | Incidents created, by severity and service |
+| `detection_cooloff_total` | Counter | Transient spikes filtered by cool-off |
+| `detection_storm_total` | Counter | Storm detection checks |
+| `triage_total` | Counter | Triage completions, by outcome |
+| `triage_remediate_total` | Counter | Remediation attempts, by action and outcome |
+| `escalation_total` | Counter | Engineer escalations, by reason |
+| `detection_duration` | Histogram | Detection processing time |
+| `triage_duration` | Histogram | Triage processing time |
+| `escalation_duration` | Histogram | Escalation processing time |
+| `jira_create_duration` | Histogram | Jira API call latency |
 
-These metrics SHALL power a CloudWatch dashboard for incident management system health.
+These metrics power the incident management CloudWatch dashboard.
 
-### NFR-008: Incident Retention Policy
-DynamoDB incident records SHALL follow a tiered retention policy:
+### NFR-008: Lambda Timeout Configuration
+Lambda timeouts SHALL accommodate worst-case sleep durations:
 
-| Status | Retention | Mechanism |
-|--------|-----------|-----------|
-| OPEN / ESCALATED | Indefinite | No TTL — active incidents never expire |
-| AUTO-RESOLVED | 30 days | TTL set at resolution time |
-| RESOLVED | 90 days | TTL set at resolution time |
-| Grace period (post-auto-resolve) | 15 minutes | TTL on grace marker record |
+| Lambda | Timeout | Reason |
+|--------|---------|--------|
+| Detection | 180 seconds | Cool-off sleep up to 120s (SEV-3) + DynamoDB/Jira/EventBridge calls |
+| Triage | 300 seconds | Verification wait up to 120s (SEV-3) + log analysis + remediation + Jira updates |
+| Escalation | 30 seconds | No sleeps -- Jira enrichment + SNS notification only |
 
-- TTL SHALL be calculated and set when the incident status changes to a resolved state.
-- Resolved records are retained for audit trail purposes before automatic cleanup.
-- Active incidents (OPEN, ESCALATED, TRIAGING, REMEDIATING, VERIFYING) SHALL NOT have a TTL set.
+Synchronous sleeps are a deliberate trade-off: simpler architecture (no Step Functions) at the cost of Lambda execution time. Cost is bounded and acceptable for low-frequency alarm events.
 
 ---
 
 ## Acceptance Criteria
 
-### Leg 1 — Incident Detection & Creation
+### Leg 1 -- Detection
 
 | ID | Criterion | Requirement |
 |----|-----------|-------------|
-| AC-001 | CloudWatch alarm (ALARM state) triggers pipeline via SNS | FR-001 |
-| AC-002 | Error rate alarm classified as SEV-1 | FR-002 |
-| AC-003 | Latency alarm classified as SEV-2 | FR-002 |
-| AC-004 | 4xx alarm classified as SEV-3 | FR-002 |
-| AC-005 | Service, alarm type, and stage correctly extracted | FR-003 |
-| AC-006 | Transient spike (recovers within cool-off) does not create incident | FR-004 |
-| AC-007 | Persistent alarm (still ALARM after cool-off) creates incident | FR-004 |
-| AC-008 | Duplicate alarms do not create new incidents | FR-005 |
-| AC-009 | Existing Jira ticket gets comment on duplicate alarm | FR-005 |
-| AC-010 | Incident record created in DynamoDB with status DETECTED | FR-006 |
-| AC-011 | Minimal Jira ticket created with "triage in progress" message | FR-006 |
-| AC-012 | New service onboards with only an alarm action change | FR-007 |
+| AC-001 | CloudWatch alarm (ALARM state) triggers Detection Lambda via SNS | FR-001 |
+| AC-002 | Severity and recovery_model classified from alarm name using externalized severity_mapping | FR-002 |
+| AC-003 | Service, alarm type, and stage correctly extracted from alarm name | FR-003 |
+| AC-004 | Transient spike (recovers within cool-off) does not create incident | FR-004 |
+| AC-005 | Persistent alarm (still ALARM after cool-off) creates incident | FR-004 |
+| AC-006 | Reserve-then-create pattern prevents duplicate Jira tickets under concurrency | FR-006 |
+| AC-007 | RESERVED conflict: exit silently (winner is still creating ticket) | FR-006 |
+| AC-008 | DETECTED/TRIAGING/ESCALATED conflict: add duplicate comment to existing Jira ticket | FR-006 |
+| AC-009 | GRACE conflict: handle per grace period rules (reopen + escalate) | FR-006, FR-016 |
+| AC-010 | Jira creation failure: reserved DynamoDB record deleted, event retryable via DLQ | FR-006 |
+| AC-011 | Storm detected when >threshold incidents in window (configurable) | FR-007 |
+| AC-012 | Storm flag included in IncidentCreated event | FR-007 |
+| AC-013 | Jira incident ticket created with correct summary, priority, labels, incident_key | FR-008 |
+| AC-014 | IncidentCreated event published to EventBridge with recovery_model | FR-009 |
+| AC-015 | New service onboards with only an alarm action change | FR-010 |
+| AC-015a | Alarm ARN and trigger dimensions extracted from SNS message | FR-003 |
+| AC-015b | Lambda function name (from trigger dimensions) included in Jira ticket description | FR-008 |
+| AC-015c | Lambda function name propagated in EventBridge events | FR-009 |
 
-### Leg 2 — Automated Triage & Self-Healing
-
-| ID | Criterion | Requirement |
-|----|-----------|-------------|
-| AC-013 | Error logs collected and grouped by type | FR-008 |
-| AC-014 | Affected operations and user count identified | FR-008 |
-| AC-015 | Root cause classified with confidence level | FR-009 |
-| AC-016 | Blast radius assessed (users, error rate, endpoints, duration) | FR-010 |
-| AC-017 | Remediation attempted when runbook available | FR-011 |
-| AC-018 | Verification wait period observed after remediation | FR-011 |
-| AC-019 | 3-point verification performed (alarm state, health check, error rate) | FR-011 |
-| AC-020 | All verification checks pass → AUTO-RESOLVED | FR-012 |
-| AC-021 | Resolution evidence collected (duration, action, verification results) | FR-012 |
-| AC-022 | Jira ticket updated with resolution comment and logs attached | FR-012 |
-| AC-023 | Jira ticket closed or labeled auto-resolved | FR-012 |
-| AC-024 | No engineer notification for auto-resolved incidents | FR-012 |
-| AC-025 | Grace period prevents remediation loops on recurrence | FR-012 |
-| AC-026 | Recurrence within grace period escalates directly to Leg 3 | FR-012 |
-| AC-027 | Any verification check fails → escalation to Leg 3 | FR-011 |
-| AC-028 | No remediation available → escalation to Leg 3 | FR-011 |
-| AC-029 | Every status change adds timestamped Jira comment | FR-013 |
-
-### Leg 3 — Engineer Escalation & Resolution
+### Leg 2 -- Triage
 
 | ID | Criterion | Requirement |
 |----|-----------|-------------|
-| AC-030 | Jira ticket enriched with root cause and blast radius | FR-014 |
-| AC-031 | Error logs and request traces attached to ticket | FR-014 |
-| AC-032 | Dashboard, X-Ray, and Logs Insights links in ticket | FR-014 |
-| AC-033 | Investigation commands included (copy-paste ready) | FR-014 |
-| AC-034 | Engineer can investigate without downloading logs or running scripts | FR-014 |
-| AC-035 | SNS notification sent for SEV-1 only after Leg 2 fails | FR-015 |
-| AC-036 | SNS notification sent for SEV-2 only after Leg 2 fails | FR-015 |
-| AC-037 | No SNS notification for SEV-3 | FR-015 |
-| AC-038 | Alarm recovery resolves matching OPEN/ESCALATED incident | FR-016 |
-| AC-039 | Resolution logs and duration attached to Jira ticket | FR-016 |
-| AC-040 | DynamoDB record updated with resolved_at | FR-016 |
+| AC-016 | Error logs collected within bounded window (500 events, 15 min) | FR-011 |
+| AC-017 | Error summary includes count, grouping, timeline, affected ops/users | FR-011 |
+| AC-017a | Log analysis targets exact log group using function_name when available | FR-011 |
+| AC-017b | Sample error-triggering payloads (up to 5) extracted from structured logs | FR-011 |
+| AC-018 | Root cause classified using externalized rules with confidence level | FR-012 |
+| AC-019 | Blast radius assessed (users, error rate, endpoints, duration) | FR-013 |
+| AC-020 | Storm detected: analysis runs but remediation skipped, escalates with reason "incident-storm" | FR-014 |
+| AC-021 | Single remediation attempt per incident enforced | FR-014 |
+| AC-022 | Remediation action looked up from externalized catalog | FR-014 |
+| AC-023 | No catalog match: escalates with reason "no-remediation-available" | FR-014 |
+| AC-024 | Verification wait period observed after remediation (per-severity, configurable) | FR-014 |
+| AC-025 | 3-point verification performed (alarm state, health check, error rate) | FR-014 |
+| AC-026 | All verification checks pass: Jira resolved, DynamoDB GRACE (15-min TTL) | FR-015 |
+| AC-027 | Resolution evidence collected and attached to Jira | FR-015 |
+| AC-028 | IncidentAutoResolved event published with recovery_model and recovery_status | FR-015 |
+| AC-029 | No engineer notification for auto-resolved incidents | FR-015 |
+| AC-030 | Grace period recurrence: reopen incident, escalate with reason "grace-period-recurrence" | FR-016 |
+| AC-031 | Any verification check fails: escalates with reason "verification-failed" | FR-014 |
+| AC-032 | Every triage step adds timestamped Jira comment | FR-017 |
 
-### Shared
+### Leg 3 -- Escalation
 
 | ID | Criterion | Requirement |
 |----|-----------|-------------|
-| AC-041 | Jira failure does not block DynamoDB or other steps | NFR-003 |
-| AC-042 | SNS failure does not block other steps | NFR-003 |
-| AC-043 | Jira credentials from Secrets Manager only | NFR-002 |
-| AC-044 | Hexagonal architecture (handlers/services/domain/dto/repos) | NFR-004 |
-| AC-045 | Unit test coverage ≥ 80% | NFR-004 |
-| AC-046 | Duplicate SNS deliveries do not create duplicate incidents | NFR-005 |
-| AC-047 | Atomic conditional write prevents race condition on incident creation | NFR-005, FR-005 |
-| AC-048 | Failed alarm events land in DLQ, not lost | NFR-006 |
-| AC-049 | DLQ depth alarm fires when unprocessed events accumulate | NFR-006 |
-| AC-050 | Operational metrics emitted (created, auto-resolved, escalated, filtered) | NFR-007 |
-| AC-051 | Incident management dashboard shows system effectiveness | NFR-007 |
-| AC-052 | Resolved incidents have TTL set per retention policy | NFR-008 |
-| AC-053 | Active incidents do not have TTL (never auto-expire) | NFR-008 |
-| AC-054 | incident_key present in every structured log entry | NFR-001 |
-| AC-055 | Single remediation attempt per incident enforced | FR-011 |
-| AC-056 | Log analysis bounded to 500 events / 15 min window | FR-008 |
+| AC-033 | Jira ticket enriched with root cause, blast radius, remediation history | FR-018 |
+| AC-033a | Jira ticket includes Lambda function name and alarm ARN | FR-018 |
+| AC-034 | Error logs, error-triggering payloads, and request traces attached to Jira ticket | FR-018 |
+| AC-035 | Dashboard, X-Ray, and Logs Insights links in Jira ticket | FR-018 |
+| AC-036 | Copy-paste investigation commands included in Jira ticket | FR-018 |
+| AC-037 | Engineer can investigate without downloading logs or running scripts | FR-018 |
+| AC-038 | Escalation reason included in Jira enrichment and notification | FR-018, FR-019 |
+| AC-039 | SNS notification sent for SEV-1 and SEV-2 only | FR-019 |
+| AC-040 | No SNS notification for SEV-3 | FR-019 |
+
+### Recovery & Resolution
+
+| ID | Criterion | Requirement |
+|----|-----------|-------------|
+| AC-041 | Alarm recovery (OK) resolves matching incident in Jira with diagnostics | FR-020 |
+| AC-042 | Resolution-time diagnostics collected (recovery logs, health check) | FR-020 |
+| AC-043 | Recovery logs attached to Jira ticket | FR-020 |
+| AC-044 | DynamoDB record deleted on manual resolution | FR-020 |
+| AC-045 | No matching incident on recovery: log and skip | FR-020 |
+
+### Shared / Cross-Cutting
+
+| ID | Criterion | Requirement |
+|----|-----------|-------------|
+| AC-046 | All three Lambdas use @observe decorator with domain context | NFR-001 |
+| AC-047 | incident_key present in every structured log entry | NFR-001 |
+| AC-048 | Jira credentials from Secrets Manager only | NFR-002 |
+| AC-049 | Each Lambda IAM role follows least-privilege | NFR-002 |
+| AC-050 | Failure in one step does not block other steps | NFR-003 |
+| AC-051 | Hexagonal architecture: handlers -> services -> models -> repositories | NFR-004 |
+| AC-052 | Duplicate SNS/EventBridge deliveries do not create duplicate incidents | NFR-005 |
+| AC-053 | Failed events captured in DLQ, not lost | NFR-006 |
+| AC-054 | DLQ depth alarm fires on unprocessed events | NFR-006 |
+| AC-055 | Operational metrics emitted per @observe decorator | NFR-007 |
+| AC-056 | Incident management dashboard shows system effectiveness | NFR-007 |
+| AC-057 | Active DynamoDB records have TTL = created_at + 24 hours | NFR-008 |
+| AC-058 | GRACE records have TTL = resolved_at + 15 minutes | NFR-008 |
+| AC-059 | Lambda timeouts: Detection 180s, Triage 300s, Escalation 30s | NFR-008 |
+| AC-060 | Externalized config loaded at cold start, no code changes for threshold tuning | FR-002, FR-012, FR-014 |
+| AC-061 | Stateless recovery model: no recovery action triggered after remediation | FR-015a |
+| AC-062 | Replay recovery model: DLQ replay workflow triggered after remediation | FR-015a |
+| AC-063 | Reprocess recovery model: batch rerun workflow triggered after remediation | FR-015a |
+| AC-064 | Data-correction recovery model: reconciliation workflow triggered after remediation | FR-015a |
+| AC-065 | Backlog-drain recovery model: consumer scaling triggered after remediation | FR-015a |
+| AC-066 | Recovery catalog looked up from externalized config | FR-015a |
+| AC-067 | Recovery workflow execution ID recorded in Jira comment | FR-015a |
+| AC-068 | Recovery workflow failure does not block auto-resolution | FR-015a |
+| AC-069 | Incident system never processes business data -- only triggers external workflows | FR-015a |
+| AC-070 | Recovery workflow payloads include idempotency keys (incident_key, jira_ticket_id, execution_id) | FR-015a |
+| AC-071 | Stale RESERVED record (older than reservation_timeout_seconds) reclaimed and retried | FR-006 |
+| AC-072 | Triage timeout: escalates with reason "triage-timeout" when elapsed time exceeds triage_timeout_seconds | FR-014 |
+| AC-073 | Root cause classification uses string-based rules from config, not a fixed enum | FR-012 |
 
 ---
 
@@ -525,3 +789,5 @@ DynamoDB incident records SHALL follow a tiered retention policy:
 - Multi-region incident correlation
 - Incident dashboard UI
 - Custom remediation runbook authoring UI
+- Step Functions orchestration (deliberate trade-off for simplicity)
+- AI-assisted diagnosis (future EventBridge consumer)

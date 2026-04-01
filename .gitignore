@@ -21,6 +21,9 @@ cdk.out/
 .env
 .env.local
 
+# Credentials
+.jira_credentials.json
+
 # IDE
 .vscode/
 .idea/

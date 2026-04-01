@@ -10,6 +10,7 @@ from aws_cdk import App, Environment
 from stacks.auth_stack import AuthStack
 from stacks.hello_world_stack import HelloWorldStack
 from stacks.calculator_stack import CalculatorStack
+from stacks.incident_manager_stack import IncidentManagerStack
 
 app = App()
 
@@ -55,6 +56,15 @@ CalculatorStack(
     config=config,
     user_pool=auth_stack.user_pool,
     description=f"Calculator API Stack ({target_env})"
+)
+
+# Incident Manager Stack (event-driven, no API Gateway)
+IncidentManagerStack(
+    app,
+    f"IncidentManagerStack-{target_env}",
+    env=aws_env,
+    config=config,
+    description=f"Incident Management Pipeline Stack ({target_env})",
 )
 
 app.synth()
