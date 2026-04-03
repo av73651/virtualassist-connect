@@ -323,11 +323,29 @@ class SrePlatformStack(Stack):
                     f"arn:aws:logs:{Stack.of(self).region}:{Stack.of(self).account}:log-group:/aws/lambda/*:*"
                 ],
             ),
-            # CloudWatch: alarm state check (cool-off) + alarm history
+            # CloudWatch: alarm operations (describe, history)
             iam.PolicyStatement(
-                actions=["cloudwatch:DescribeAlarms", "cloudwatch:DescribeAlarmHistory"],
+                actions=[
+                    "cloudwatch:DescribeAlarms",
+                    "cloudwatch:DescribeAlarmHistory",
+                ],
                 resources=[
                     f"arn:aws:cloudwatch:{Stack.of(self).region}:{Stack.of(self).account}:alarm:*"
+                ],
+            ),
+            # CloudWatch: metrics collection (GetMetricStatistics requires wildcard resource)
+            iam.PolicyStatement(
+                actions=["cloudwatch:GetMetricStatistics"],
+                resources=["*"],
+            ),
+            # Lambda: metrics and deployment history collection
+            iam.PolicyStatement(
+                actions=[
+                    "lambda:GetFunction",
+                    "lambda:ListVersionsByFunction",
+                ],
+                resources=[
+                    f"arn:aws:lambda:{Stack.of(self).region}:{Stack.of(self).account}:function:*"
                 ],
             ),
         ])
