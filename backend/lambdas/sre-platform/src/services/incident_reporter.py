@@ -58,21 +58,34 @@ class IncidentReporter:
             datapoints = alarm_metrics.get("datapoints", [])
             alarm_config = alarm_metrics.get("alarm_config", {})
 
-            if datapoints:
+            # Always show alarm config, even with zero datapoints (indicates WHY no data)
+            if alarm_config:
                 metric_name = alarm_config.get("metric_name", "value").lower()
                 threshold = alarm_config.get("threshold", 0.0)
                 comparison_op = alarm_config.get("comparison_operator", "")
+                eval_periods = alarm_config.get("evaluation_periods", 0)
+                datapoints_to_alarm = alarm_config.get("datapoints_to_alarm", 0)
 
-                # Format last 10 datapoints for visibility
-                recent = datapoints[-10:]
-                datapoint_lines = "\n".join(
-                    f"  {dp['timestamp'][11:16]} {metric_name}={int(dp['value'])}"
-                    for dp in recent
-                )
-                parts.append(
-                    f"\nAlarm Evidence (last {len(recent)} datapoints):\n{datapoint_lines}\n"
-                    f"Threshold: {threshold} ({comparison_op})"
-                )
+                if datapoints:
+                    # Format last 10 datapoints for visibility
+                    recent = datapoints[-10:]
+                    datapoint_lines = "\n".join(
+                        f"  {dp['timestamp'][11:16]} {metric_name}={int(dp['value'])}"
+                        for dp in recent
+                    )
+                    parts.append(
+                        f"\nAlarm Evidence (last {len(recent)} datapoints):\n{datapoint_lines}\n"
+                        f"Threshold: {threshold} ({comparison_op})\n"
+                        f"Evaluation: {datapoints_to_alarm}/{eval_periods} datapoints"
+                    )
+                else:
+                    # No datapoints = new alarm OR metric lag OR alarm misconfiguration
+                    parts.append(
+                        f"\nAlarm Configuration:\n"
+                        f"Threshold: {threshold} ({comparison_op})\n"
+                        f"Evaluation: {datapoints_to_alarm}/{eval_periods} datapoints\n"
+                        f"Datapoints: 0 collected (new alarm, metric lag, or misconfiguration)"
+                    )
 
         # Blast radius — heuristic assessment
         parts.append(
