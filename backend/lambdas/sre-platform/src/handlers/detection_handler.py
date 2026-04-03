@@ -9,6 +9,8 @@ Flow:
     3. ALARM -> DetectionService.process_alarm() -> Jira + DynamoDB + EventBridge
     4. OK -> DetectionService.process_recovery() -> Jira resolved + DynamoDB deleted
 
+Enhanced with custom CloudWatch metrics monitoring via @observe decorator.
+
 Note: This is an SNS-triggered Lambda (not API Gateway), so it uses
 @observe on service/repo methods for observability rather than
 @api_gateway_handler middleware."""

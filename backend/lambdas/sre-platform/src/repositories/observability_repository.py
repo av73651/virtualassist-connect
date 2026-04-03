@@ -102,7 +102,6 @@ class ObservabilityRepository:
                 for event in response.get("events", [])
             ]
         except Exception:
-            logger.exception("Failed to collect recent logs from %s", log_group)
             return []
 
     # ------------------------------------------------------------------ #
