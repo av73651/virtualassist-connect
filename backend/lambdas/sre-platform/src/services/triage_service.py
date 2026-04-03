@@ -124,6 +124,24 @@ class TriageService:
             references=classification_result.get("references", []),
         )
 
+        # Step 4a: Escalation validation - don't escalate false positives
+        error_count = error_data.get("error_count", 0)
+        if error_count == 0 and confidence == "low":
+            # False positive: no errors + low confidence classification
+            # Mark for monitoring instead of escalating
+            existing = self._correlation.get(incident_key)
+            if existing:
+                monitored = existing.to_status(CorrelationStatus.GRACE)
+                self._correlation.update(monitored)
+
+            self._reporter.report_resolution_summary(
+                jira_ticket_id,
+                "Incident marked for monitoring. No errors detected and classification confidence is low. "
+                "Likely causes: metric lag, alarm misconfiguration, or transient spike that self-resolved. "
+                "System will continue monitoring. If alarm persists or errors appear, incident will be reopened.",
+            )
+            return "monitoring"
+
         # Build enriched escalation context
         effective_alarm = alarm_name or derive_alarm_name(incident_key)
         escalation_context = {

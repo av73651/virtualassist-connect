@@ -52,6 +52,8 @@ Respond with ONLY a JSON object. CRITICAL: log_analysis MUST be ONE sentence max
 
 NOTE: blast_radius and verification are handled in escalation phase, NOT here.
 
+CRITICAL: NO speculation without evidence. Avoid "may have", "might", "possibly", "likely", "suggests" unless directly supported by metrics/datapoints.
+
 {{
   "classification": "<one of the valid classifications above>",
   "confidence": "high|medium|low",
