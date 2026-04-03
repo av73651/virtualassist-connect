@@ -29,6 +29,7 @@ from src.repositories.observability_repository import ObservabilityRepository
 from src.services.detection_service import DetectionService
 from src.services.incident_reporter import IncidentReporter
 from src.services.log_analysis_service import LogAnalysisService
+from src.services.metrics_collection_service import MetricsCollectionService
 
 configure_structured_logging()
 logger = logging.getLogger(__name__)
@@ -69,6 +70,9 @@ def _init_services():
 
     log_analysis_service = LogAnalysisService(observability_repo, _config)
     incident_reporter = IncidentReporter(ticketing_repo, _config)
+    metrics_collection_service = MetricsCollectionService(
+        observability_repo, correlation_repo, _config
+    )
 
     _detection_service = DetectionService(
         correlation_repo=correlation_repo,
@@ -78,6 +82,7 @@ def _init_services():
         log_analysis_service=log_analysis_service,
         incident_reporter=incident_reporter,
         config=_config,
+        metrics_collection_service=metrics_collection_service,
     )
 
 
