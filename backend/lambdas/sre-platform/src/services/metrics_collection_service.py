@@ -74,25 +74,38 @@ class MetricsCollectionService:
                 result["enrichment"]["cache_hit"] = True
                 return result
 
-        try:
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                alarm_future = executor.submit(
-                    self._observability.get_alarm_metric_data, alarm_name, lookback_minutes
-                )
-                lambda_future = executor.submit(
-                    self._observability.get_lambda_metrics, function_name, lookback_minutes
-                )
-                deploy_future = executor.submit(
-                    self._observability.get_recent_deployments,
-                    function_name,
-                    self._thresholds.deployments_lookback_minutes,
-                )
+        # Collect metrics in parallel with per-component error handling (graceful partial degradation)
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            alarm_future = executor.submit(
+                self._observability.get_alarm_metric_data, alarm_name, lookback_minutes
+            )
+            lambda_future = executor.submit(
+                self._observability.get_lambda_metrics, function_name, lookback_minutes
+            )
+            deploy_future = executor.submit(
+                self._observability.get_recent_deployments,
+                function_name,
+                self._thresholds.deployments_lookback_minutes,
+            )
 
+            # Collect each component independently - don't fail entire bundle if one component fails
+            try:
                 alarm_metrics = alarm_future.result()
+            except Exception:
+                alarm_metrics = {"alarm_config": {}, "datapoints": [], "current_state": "ERROR"}
+
+            try:
                 lambda_metrics = lambda_future.result()
+            except Exception:
+                lambda_metrics = {
+                    "invocations": 0, "errors": 0, "throttles": 0,
+                    "duration_avg": 0.0, "concurrent_executions_max": 0, "error_rate": 0.0,
+                }
+
+            try:
                 deployments = deploy_future.result()
-        except Exception:
-            return self._empty_metrics_bundle(incident_key, function_name, alarm_name, now)
+            except Exception:
+                deployments = []
 
         enrichment = self._enrich_metrics(alarm_metrics, lambda_metrics, deployments, now)
         enrichment["cache_hit"] = False
