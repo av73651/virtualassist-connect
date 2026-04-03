@@ -72,7 +72,7 @@ Add incident manager config to `infra/config.json`:
       },
       "sns_alarm_topic_name": "incident-alarm-ingestion",
       "sns_notification_topic_name": "incident-engineer-notifications",
-      "jira_secret_name": "incident-manager/jira-credentials",
+      "jira_secret_name": "sre-platform/jira-credentials",
       "jira_url": "https://rameshnag2002.atlassian.net"
     }
   },
@@ -95,7 +95,7 @@ Add incident manager config to `infra/config.json`:
       },
       "sns_alarm_topic_name": "incident-alarm-ingestion",
       "sns_notification_topic_name": "incident-engineer-notifications",
-      "jira_secret_name": "incident-manager/jira-credentials",
+      "jira_secret_name": "sre-platform/jira-credentials",
       "jira_url": "https://rameshnag2002.atlassian.net"
     }
   }
@@ -365,7 +365,7 @@ class IncidentManagerStack(Stack):
             self, "DetectionFunction",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="src.handlers.detection_handler.lambda_handler",
-            code=lambda_.Code.from_asset("../backend/lambdas/incident-manager/package"),
+            code=lambda_.Code.from_asset("../backend/lambdas/sre-platform/package"),
             function_name=f"incident-detection-{self.stage}",
             description="Incident Detection Lambda (Leg 1) - SNS alarm ingestion",
             memory_size=lam_config["memory_size"],
@@ -431,7 +431,7 @@ class IncidentManagerStack(Stack):
             self, "TriageFunction",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="src.handlers.triage_handler.lambda_handler",
-            code=lambda_.Code.from_asset("../backend/lambdas/incident-manager/package"),
+            code=lambda_.Code.from_asset("../backend/lambdas/sre-platform/package"),
             function_name=f"incident-triage-{self.stage}",
             description="Incident Triage Lambda (Leg 2) - analysis, remediation, verification, recovery",
             memory_size=lam_config["memory_size"],
@@ -484,7 +484,7 @@ class IncidentManagerStack(Stack):
             self, "EscalationFunction",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="src.handlers.escalation_handler.lambda_handler",
-            code=lambda_.Code.from_asset("../backend/lambdas/incident-manager/package"),
+            code=lambda_.Code.from_asset("../backend/lambdas/sre-platform/package"),
             function_name=f"incident-escalation-{self.stage}",
             description="Incident Escalation Lambda (Leg 3) - Jira enrichment, engineer notification",
             memory_size=lam_config["memory_size"],
@@ -549,7 +549,7 @@ class IncidentManagerStack(Stack):
             rule_name=f"incident-created-to-triage-{self.stage}",
             description="Routes IncidentCreated events to Triage Lambda",
             event_pattern=events.EventPattern(
-                source=["incident-manager"],
+                source=["sre.incident-detection"],
                 detail_type=["IncidentCreated"]
             ),
             targets=[
@@ -567,7 +567,7 @@ class IncidentManagerStack(Stack):
             rule_name=f"escalation-required-to-escalation-{self.stage}",
             description="Routes EscalationRequired events to Escalation Lambda",
             event_pattern=events.EventPattern(
-                source=["incident-manager"],
+                source=["sre.incident-detection"],
                 detail_type=["EscalationRequired"]
             ),
             targets=[
@@ -590,7 +590,7 @@ class IncidentManagerStack(Stack):
         """Create CloudWatch dashboard for incident management observability."""
         dashboard = cloudwatch.Dashboard(
             self, "IncidentDashboard",
-            dashboard_name=f"incident-manager-dashboard-{self.stage}"
+            dashboard_name=f"sre-platform-dashboard-{self.stage}"
         )
 
         # Row 1: Lambda invocations (all 3 Lambdas)
@@ -926,7 +926,7 @@ All resources follow `{purpose}-{stage}` pattern:
 | Detection DLQ | `incident-detection-dlq-{stage}` | `incident-detection-dlq-dev` |
 | Triage DLQ | `incident-triage-dlq-{stage}` | `incident-triage-dlq-dev` |
 | Escalation DLQ | `incident-escalation-dlq-{stage}` | `incident-escalation-dlq-dev` |
-| Dashboard | `incident-manager-dashboard-{stage}` | `incident-manager-dashboard-dev` |
+| Dashboard | `sre-platform-dashboard-{stage}` | `sre-platform-dashboard-dev` |
 
 ---
 
@@ -934,7 +934,7 @@ All resources follow `{purpose}-{stage}` pattern:
 
 Before `cdk deploy`:
 
-1. **Jira credentials in Secrets Manager**: Create secret `incident-manager/jira-credentials` with:
+1. **Jira credentials in Secrets Manager**: Create secret `sre-platform/jira-credentials` with:
    ```json
    {
      "email": "incident-bot@example.com",

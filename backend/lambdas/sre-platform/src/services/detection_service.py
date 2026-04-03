@@ -25,7 +25,17 @@ from src.services.log_analysis_service import LogAnalysisService
 class DetectionService:
     """Orchestrates incident detection: cool-off -> dedup -> storm -> DynamoDB -> Jira -> EventBridge."""
 
-    def __init__(self, correlation_repo, observability_repo, ticketing_repo, event_bus_repo, log_analysis_service, incident_reporter, config: IncidentConfig):
+    def __init__(
+        self,
+        correlation_repo,
+        observability_repo,
+        ticketing_repo,
+        event_bus_repo,
+        log_analysis_service,
+        incident_reporter,
+        config: IncidentConfig,
+        metrics_collection_service=None,
+    ):
         self._correlation = correlation_repo
         self._observability = observability_repo
         self._ticketing = ticketing_repo
@@ -33,6 +43,7 @@ class DetectionService:
         self._log_analysis = log_analysis_service
         self._reporter = incident_reporter
         self._config = config
+        self._metrics_service = metrics_collection_service
 
     @observe(operation="process_alarm", metric_prefix="detection")
     def process_alarm(self, alarm_event: AlarmEvent) -> str | None:
@@ -75,6 +86,22 @@ class DetectionService:
         detected = record.associate_jira_ticket(jira_ticket_id)
         self._correlation.update(detected)
 
+        metrics_bundle = None
+        if self._metrics_service:
+            try:
+                metrics_bundle = self._metrics_service.collect_incident_metrics(
+                    incident_key=incident_key,
+                    function_name=alarm_event.function_name or "",
+                    alarm_name=alarm_event.alarm_name,
+                    lookback_minutes=15,
+                    force_refresh=False,
+                )
+                if metrics_bundle:
+                    enriched = detected.with_metrics(metrics_bundle, now)
+                    self._correlation.update(enriched)
+            except Exception:
+                pass
+
         storm_detected, active_count = self._check_storm()
 
         event_detail = {
@@ -94,6 +121,9 @@ class DetectionService:
         }
         if storm_detected:
             event_detail["active_incident_count"] = active_count
+
+        if metrics_bundle:
+            event_detail["metrics"] = metrics_bundle
 
         self._event_bus.publish_event("IncidentCreated", event_detail)
 

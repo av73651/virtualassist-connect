@@ -1,9 +1,12 @@
-Analyze this incident for an on-call engineer. Be concise — bullet points, not paragraphs.
+Analyze this incident for an on-call engineer. Output MUST be under 80 words. No CLI commands in analysis.
 
 ## Context
 Service: {service} ({stage}) | Type: {service_type} | Alarm: {alarm_type}
 Resource: {function_name} | Root cause: {root_cause} ({confidence})
 Escalation reason: {reason}
+
+## Metrics Timeline
+{metrics_timeline}
 
 ## Prior Analysis
 {log_analysis}
@@ -16,15 +19,19 @@ Escalation reason: {reason}
 
 {sample_errors}
 
-## Instructions
-Respond in this exact format using the knowledge base (DECISION TREE, FAILURE MODES, DIAGNOSTICS):
+## Required Format (EXACTLY)
 
-**Root Cause**: One sentence. What failed and why.
+**Root Cause**: [10 words max] What failed and why based on metrics + errors.
 
-**Immediate Actions**:
-1. [action + CLI command]
-2. [action + CLI command]
+**Blast Radius**: [invocations] invocations, [errors] errors, [X%] of requests affected. Example: "1,247 invocations, 23 errors, 1.8% of requests affected"
 
-**Watch For**: One sentence on cascading risks.
+**Action**: [verb] [target]. Example: "Rollback deployment v1.2.3" or "Increase Lambda memory to 1024MB"
 
-STRICT: Under 150 words total. No preamble. No markdown headers. No explanations of what you're doing.
+**Verify**: [10 words max] What should improve after action (metric-specific).
+
+CRITICAL CONSTRAINTS:
+- 100 words maximum total output
+- Use invocation counts from metrics timeline for blast radius
+- NO CLI commands (separate section exists in Jira)
+- NO preamble, NO markdown headers beyond required format
+- NO explanations of methodology

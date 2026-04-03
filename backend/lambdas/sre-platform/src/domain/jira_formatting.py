@@ -7,7 +7,7 @@ ADF = Atlassian Document Format (Jira's rich-text JSON schema)."""
 
 from src.models.alarm_event import AlarmEvent
 from src.models.config import IncidentConfig
-from src.models.enums import EscalationReason
+from src.models.enums import EscalationReason, ErrorRateTrend, DeploymentCorrelation
 
 
 # ------------------------------------------------------------------ #
@@ -45,6 +45,56 @@ def adf_code_block(text: str, language: str = "bash") -> dict:
 def adf_rule() -> dict:
     """ADF horizontal rule (divider)."""
     return {"type": "rule"}
+
+
+def adf_table(headers: list[str], rows: list[list[str]]) -> dict:
+    """ADF table node with headers and rows."""
+    header_cells = [
+        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": h}]}]}
+        for h in headers
+    ]
+    header_row = {"type": "tableRow", "content": header_cells}
+
+    data_rows = []
+    for row in rows:
+        cells = [
+            {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": str(cell)}]}]}
+            for cell in row
+        ]
+        data_rows.append({"type": "tableRow", "content": cells})
+
+    return {"type": "table", "content": [header_row] + data_rows}
+
+
+# ------------------------------------------------------------------ #
+# Metrics timeline formatting helpers
+# ------------------------------------------------------------------ #
+
+# 10% variance threshold for trend classification (increase/decrease vs stable)
+_TREND_INCREASE_THRESHOLD = 1.1
+_TREND_DECREASE_THRESHOLD = 0.9
+
+
+def trend_arrow(old_val: int | float, new_val: int | float) -> str:
+    """Returns trend arrow: ↑ increase, ↓ decrease, → stable.
+
+    Uses ±10% variance threshold to classify trends."""
+    if new_val > old_val * _TREND_INCREASE_THRESHOLD:
+        return "↑"
+    elif new_val < old_val * _TREND_DECREASE_THRESHOLD:
+        return "↓"
+    else:
+        return "→"
+
+
+def format_percentage(val: float) -> str:
+    """Format as percentage with 1 decimal place."""
+    return f"{val:.1f}%"
+
+
+def format_count(val: int) -> str:
+    """Format as integer count string."""
+    return str(val)
 
 
 # ------------------------------------------------------------------ #
@@ -123,6 +173,58 @@ def build_ticket_labels(config: IncidentConfig, alarm_event: AlarmEvent) -> list
 # Escalation ADF comment
 # ------------------------------------------------------------------ #
 
+def _build_metrics_timeline_section(
+    detection_metrics: dict | None,
+    current_metrics: dict | None,
+) -> list[dict]:
+    """Builds ADF blocks for metrics timeline comparison (Detection T0 vs Current T+N).
+
+    Returns list of ADF blocks (heading + table) showing trend arrows."""
+    if not detection_metrics or not current_metrics:
+        return []
+
+    blocks: list[dict] = []
+    blocks.append(adf_heading(3, "Metrics Timeline"))
+
+    detection_enrichment = detection_metrics.get("enrichment", {})
+    current_enrichment = current_metrics.get("enrichment", {})
+
+    detection_lambda = detection_metrics.get("lambda_metrics", {})
+    current_lambda = current_metrics.get("lambda_metrics", {})
+
+    detection_error_rate = detection_lambda.get("error_rate", 0.0)
+    current_error_rate = current_lambda.get("error_rate", 0.0)
+    error_rate_trend = trend_arrow(detection_error_rate, current_error_rate)
+
+    detection_invocations = detection_lambda.get("invocations", 0)
+    current_invocations = current_lambda.get("invocations", 0)
+    invocation_trend = trend_arrow(detection_invocations, current_invocations)
+
+    detection_errors = detection_lambda.get("errors", 0)
+    current_errors = current_lambda.get("errors", 0)
+    error_count_trend = trend_arrow(detection_errors, current_errors)
+
+    detection_deployment = detection_enrichment.get("recent_deployment_version", "none")
+    current_deployment = current_enrichment.get("recent_deployment_version", "none")
+    deployment_changed = "✓" if detection_deployment != current_deployment else "→"
+
+    rows = [
+        ["Error Rate", format_percentage(detection_error_rate), format_percentage(current_error_rate), error_rate_trend],
+        ["Invocations", format_count(detection_invocations), format_count(current_invocations), invocation_trend],
+        ["Errors", format_count(detection_errors), format_count(current_errors), error_count_trend],
+        ["Deployment", detection_deployment, current_deployment, deployment_changed],
+        ["Error Trend", detection_enrichment.get("error_rate_trend", ErrorRateTrend.UNKNOWN.value), current_enrichment.get("error_rate_trend", ErrorRateTrend.UNKNOWN.value), ""],
+        ["Deploy Correlation", detection_enrichment.get("deployment_correlation", DeploymentCorrelation.NONE.value), current_enrichment.get("deployment_correlation", DeploymentCorrelation.NONE.value), ""],
+    ]
+
+    blocks.append(adf_table(
+        headers=["Metric", "Detection (T0)", "Current (T+N)", "Trend"],
+        rows=rows,
+    ))
+
+    return blocks
+
+
 def build_escalation_adf(
     incident_key: str,
     service: str,
@@ -138,6 +240,8 @@ def build_escalation_adf(
     ai_analysis: str | None = None,
     ai_references: list[dict] | None = None,
     region: str = "us-west-2",
+    detection_metrics: dict | None = None,
+    current_metrics: dict | None = None,
 ) -> list[dict]:
     """Builds ADF content blocks for rich Jira escalation comment.
 
@@ -185,6 +289,12 @@ def build_escalation_adf(
                 f"- {ref.get('source', 'unknown')}" for ref in ai_references
             )
             blocks.append(adf_code_block(ref_lines, language="text"))
+        blocks.append(adf_rule())
+
+    # --- Metrics Timeline (Detection baseline vs Current state) ---
+    metrics_blocks = _build_metrics_timeline_section(detection_metrics, current_metrics)
+    if metrics_blocks:
+        blocks.extend(metrics_blocks)
         blocks.append(adf_rule())
 
     # --- Diagnostics ---

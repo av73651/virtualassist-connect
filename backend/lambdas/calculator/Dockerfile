@@ -1,17 +1,17 @@
 # =============================================================================
-# hello-world Lambda — CI Test Image
+# calculator Lambda — CI Test Image
 #
 # PURPOSE: Provides a reproducible environment for running pytest in CI.
 #          Deployment uses ZIP packages, NOT this image.
 #
 # BUILD from project root:
-#   docker build -f backend/lambdas/hello-world/Dockerfile \
-#     -t lambda-hello-world-ci .
+#   docker build -f backend/lambdas/calculator/Dockerfile \
+#     -t lambda-calculator-ci .
 # =============================================================================
 FROM public.ecr.aws/lambda/python:3.12
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
-COPY backend/lambdas/hello-world/requirements.txt ${LAMBDA_TASK_ROOT}/
+COPY backend/lambdas/calculator/requirements.txt ${LAMBDA_TASK_ROOT}/
 RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements.txt
 
 # ── Shared Lambda layer ───────────────────────────────────────────────────────
@@ -19,11 +19,11 @@ RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements.txt
 COPY backend/lambda-layer/python/ ${LAMBDA_TASK_ROOT}/
 
 # ── Application source ────────────────────────────────────────────────────────
-COPY backend/lambdas/hello-world/src/ ${LAMBDA_TASK_ROOT}/src/
+COPY backend/lambdas/calculator/src/ ${LAMBDA_TASK_ROOT}/src/
 
 # ── Tests (copied so pytest can be run inside the container) ──────────────────
-COPY backend/lambdas/hello-world/tests/ ${LAMBDA_TASK_ROOT}/tests/
-COPY backend/lambdas/hello-world/pytest.ini ${LAMBDA_TASK_ROOT}/
+COPY backend/lambdas/calculator/tests/ ${LAMBDA_TASK_ROOT}/tests/
+COPY backend/lambdas/calculator/pytest.ini ${LAMBDA_TASK_ROOT}/
 
 # ── Default handler (overridden in CI to run pytest) ─────────────────────────
-CMD ["src.handlers.hello_handler.lambda_handler"]
+CMD ["src.handlers.calculator_handler.lambda_handler"]

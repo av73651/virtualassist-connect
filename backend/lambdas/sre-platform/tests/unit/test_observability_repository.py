@@ -26,10 +26,16 @@ def mock_logs():
 
 
 @pytest.fixture
-def obs_repo(mock_logs, mock_cloudwatch):
+def mock_lambda():
+    return Mock()
+
+
+@pytest.fixture
+def obs_repo(mock_logs, mock_cloudwatch, mock_lambda):
     return ObservabilityRepository(
         logs_client=mock_logs,
         cloudwatch_client=mock_cloudwatch,
+        lambda_client=mock_lambda,
     )
 
 
@@ -378,3 +384,411 @@ class TestParseQueryResults:
 
     def test_handles_empty_results(self):
         assert ObservabilityRepository._parse_query_results([]) == []
+
+
+# ------------------------------------------------------------------ #
+# get_alarm_metric_data (Phase 1 enhancement)
+# ------------------------------------------------------------------ #
+
+class TestGetAlarmMetricData:
+    """Retrieves alarm configuration and recent metric datapoints."""
+
+    def test_returns_alarm_config_and_datapoints(self, obs_repo, mock_cloudwatch):
+        """Full success case: alarm found, datapoints retrieved."""
+        mock_cloudwatch.describe_alarms.return_value = {
+            "MetricAlarms": [{
+                "MetricName": "Errors",
+                "Namespace": "AWS/Lambda",
+                "Threshold": 5.0,
+                "ComparisonOperator": "GreaterThanThreshold",
+                "EvaluationPeriods": 3,
+                "DatapointsToAlarm": 2,
+                "StateValue": "ALARM",
+                "Dimensions": [{"Name": "FunctionName", "Value": "test-function"}],
+                "Period": 60,
+            }]
+        }
+
+        mock_cloudwatch.get_metric_statistics.return_value = {
+            "Datapoints": [
+                {"Timestamp": datetime(2026, 3, 30, 12, 0, 0, tzinfo=timezone.utc), "Average": 10.0},
+                {"Timestamp": datetime(2026, 3, 30, 12, 1, 0, tzinfo=timezone.utc), "Sum": 15.0},
+            ]
+        }
+
+        result = obs_repo.get_alarm_metric_data("test-alarm", lookback_minutes=15)
+
+        assert result["alarm_config"]["metric_name"] == "Errors"
+        assert result["alarm_config"]["namespace"] == "AWS/Lambda"
+        assert result["alarm_config"]["threshold"] == 5.0
+        assert result["alarm_config"]["comparison_operator"] == "GreaterThanThreshold"
+        assert result["alarm_config"]["evaluation_periods"] == 3
+        assert result["alarm_config"]["datapoints_to_alarm"] == 2
+        assert result["current_state"] == "ALARM"
+        assert len(result["datapoints"]) == 2
+        assert result["datapoints"][0]["timestamp"] == "2026-03-30T12:00:00+00:00"
+        assert result["datapoints"][0]["value"] == 10.0
+        assert result["datapoints"][1]["value"] == 15.0
+
+    def test_returns_not_found_when_alarm_missing(self, obs_repo, mock_cloudwatch):
+        """Returns NOT_FOUND state when alarm doesn't exist."""
+        mock_cloudwatch.describe_alarms.return_value = {"MetricAlarms": []}
+
+        result = obs_repo.get_alarm_metric_data("nonexistent-alarm")
+
+        assert result["alarm_config"] == {}
+        assert result["datapoints"] == []
+        assert result["current_state"] == "NOT_FOUND"
+
+    def test_returns_error_on_exception(self, obs_repo, mock_cloudwatch):
+        """Returns ERROR state when API call fails."""
+        mock_cloudwatch.describe_alarms.side_effect = Exception("Access denied")
+
+        result = obs_repo.get_alarm_metric_data("test-alarm")
+
+        assert result["alarm_config"] == {}
+        assert result["datapoints"] == []
+        assert result["current_state"] == "ERROR"
+
+    def test_sorts_datapoints_by_timestamp(self, obs_repo, mock_cloudwatch):
+        """Datapoints are sorted chronologically."""
+        mock_cloudwatch.describe_alarms.return_value = {
+            "MetricAlarms": [{
+                "MetricName": "Errors",
+                "Namespace": "AWS/Lambda",
+                "Threshold": 1.0,
+                "ComparisonOperator": "GreaterThanThreshold",
+                "EvaluationPeriods": 1,
+                "DatapointsToAlarm": 1,
+                "StateValue": "OK",
+                "Dimensions": [],
+                "Period": 60,
+            }]
+        }
+
+        mock_cloudwatch.get_metric_statistics.return_value = {
+            "Datapoints": [
+                {"Timestamp": datetime(2026, 3, 30, 12, 2, 0, tzinfo=timezone.utc), "Average": 3.0},
+                {"Timestamp": datetime(2026, 3, 30, 12, 0, 0, tzinfo=timezone.utc), "Average": 1.0},
+                {"Timestamp": datetime(2026, 3, 30, 12, 1, 0, tzinfo=timezone.utc), "Average": 2.0},
+            ]
+        }
+
+        result = obs_repo.get_alarm_metric_data("test-alarm")
+
+        assert result["datapoints"][0]["value"] == 1.0
+        assert result["datapoints"][1]["value"] == 2.0
+        assert result["datapoints"][2]["value"] == 3.0
+
+    def test_handles_missing_datapoints(self, obs_repo, mock_cloudwatch):
+        """Handles case with no metric datapoints."""
+        mock_cloudwatch.describe_alarms.return_value = {
+            "MetricAlarms": [{
+                "MetricName": "Errors",
+                "Namespace": "AWS/Lambda",
+                "Threshold": 1.0,
+                "ComparisonOperator": "GreaterThanThreshold",
+                "EvaluationPeriods": 1,
+                "DatapointsToAlarm": 1,
+                "StateValue": "INSUFFICIENT_DATA",
+                "Dimensions": [],
+                "Period": 60,
+            }]
+        }
+
+        mock_cloudwatch.get_metric_statistics.return_value = {"Datapoints": []}
+
+        result = obs_repo.get_alarm_metric_data("test-alarm")
+
+        assert result["datapoints"] == []
+        assert result["current_state"] == "INSUFFICIENT_DATA"
+
+
+# ------------------------------------------------------------------ #
+# get_lambda_metrics (Phase 1 enhancement)
+# ------------------------------------------------------------------ #
+
+class TestGetLambdaMetrics:
+    """Retrieves Lambda runtime metrics with parallel execution."""
+
+    @patch.object(ObservabilityRepository, '_get_single_metric')
+    def test_returns_all_metrics_successfully(self, mock_get_single, obs_repo):
+        """Parallel execution retrieves all 5 metrics."""
+        def get_metric_side_effect(function_name, metric_name, statistic, start_time, end_time):
+            metric_values = {
+                ("Invocations", "Sum"): 100.0,
+                ("Errors", "Sum"): 5.0,
+                ("Throttles", "Sum"): 2.0,
+                ("Duration", "Average"): 250.0,
+                ("ConcurrentExecutions", "Maximum"): 10.0,
+            }
+            return metric_values.get((metric_name, statistic), 0.0)
+
+        mock_get_single.side_effect = get_metric_side_effect
+
+        result = obs_repo.get_lambda_metrics("test-function", lookback_minutes=15)
+
+        assert result["invocations"] == 100
+        assert result["errors"] == 5
+        assert result["throttles"] == 2
+        assert result["duration_avg"] == 250.0
+        assert result["concurrent_executions_max"] == 10
+        assert result["error_rate"] == 5.0  # 5/100 * 100 = 5%
+        assert mock_get_single.call_count == 5
+
+    @patch.object(ObservabilityRepository, '_get_single_metric')
+    def test_calculates_error_rate_correctly(self, mock_get_single, obs_repo):
+        """Error rate calculated as (errors / invocations) * 100."""
+        def get_metric_side_effect(function_name, metric_name, statistic, start_time, end_time):
+            metric_values = {
+                ("Invocations", "Sum"): 200.0,
+                ("Errors", "Sum"): 10.0,
+                ("Throttles", "Sum"): 0.0,
+                ("Duration", "Average"): 100.0,
+                ("ConcurrentExecutions", "Maximum"): 5.0,
+            }
+            return metric_values.get((metric_name, statistic), 0.0)
+
+        mock_get_single.side_effect = get_metric_side_effect
+
+        result = obs_repo.get_lambda_metrics("test-function")
+
+        assert result["error_rate"] == 5.0  # 10/200 * 100 = 5%
+
+    @patch.object(ObservabilityRepository, '_get_single_metric')
+    def test_handles_zero_invocations(self, mock_get_single, obs_repo):
+        """Error rate is 0 when invocations = 0 (avoids division by zero)."""
+        mock_get_single.return_value = 0.0
+
+        result = obs_repo.get_lambda_metrics("test-function")
+
+        assert result["invocations"] == 0
+        assert result["error_rate"] == 0.0
+
+    @patch.object(ObservabilityRepository, '_get_single_metric')
+    def test_handles_missing_datapoints_for_single_metric(self, mock_get_single, obs_repo):
+        """Individual metric failures return 0.0 without affecting others."""
+        def get_metric_side_effect(function_name, metric_name, statistic, start_time, end_time):
+            metric_values = {
+                ("Invocations", "Sum"): 50.0,
+                ("Errors", "Sum"): 0.0,  # Missing data
+                ("Throttles", "Sum"): 1.0,
+                ("Duration", "Average"): 200.0,
+                ("ConcurrentExecutions", "Maximum"): 3.0,
+            }
+            return metric_values.get((metric_name, statistic), 0.0)
+
+        mock_get_single.side_effect = get_metric_side_effect
+
+        result = obs_repo.get_lambda_metrics("test-function")
+
+        assert result["invocations"] == 50
+        assert result["errors"] == 0  # Missing datapoint returns 0
+        assert result["throttles"] == 1
+        assert result["duration_avg"] == 200.0
+
+    def test_returns_zeros_on_complete_failure(self, obs_repo, mock_cloudwatch):
+        """Returns all zeros when outer try block fails."""
+        mock_cloudwatch.get_metric_statistics.side_effect = Exception("Service unavailable")
+
+        result = obs_repo.get_lambda_metrics("test-function")
+
+        assert result["invocations"] == 0
+        assert result["errors"] == 0
+        assert result["throttles"] == 0
+        assert result["duration_avg"] == 0.0
+        assert result["concurrent_executions_max"] == 0
+        assert result["error_rate"] == 0.0
+
+
+# ------------------------------------------------------------------ #
+# get_recent_deployments (Phase 1 enhancement)
+# ------------------------------------------------------------------ #
+
+class TestGetRecentDeployments:
+    """Retrieves recent Lambda deployments for incident correlation."""
+
+    @patch('src.repositories.observability_repository.datetime')
+    def test_returns_recent_versions(self, mock_datetime, obs_repo, mock_lambda):
+        """Returns versions published within lookback window."""
+        # Fix current time to 2026-03-30T12:30:00
+        mock_datetime.now.return_value = datetime(2026, 3, 30, 12, 30, 0, tzinfo=timezone.utc)
+        mock_datetime.fromisoformat = datetime.fromisoformat
+
+        mock_lambda.list_versions_by_function.return_value = {
+            "Versions": [
+                {
+                    "Version": "$LATEST",
+                    "LastModified": "2026-03-30T12:25:00.000+0000",
+                },
+                {
+                    "Version": "5",
+                    "LastModified": "2026-03-30T12:20:00.000+0000",
+                    "CodeSha256": "sha-5",
+                    "Runtime": "python3.12",
+                    "MemorySize": 512,
+                    "Timeout": 30,
+                },
+                {
+                    "Version": "4",
+                    "LastModified": "2026-03-30T12:15:00.000+0000",
+                    "CodeSha256": "sha-4",
+                    "Runtime": "python3.12",
+                    "MemorySize": 512,
+                    "Timeout": 30,
+                },
+            ]
+        }
+
+        result = obs_repo.get_recent_deployments("test-function", lookback_minutes=60)
+
+        assert len(result) == 2  # $LATEST excluded
+        assert result[0]["version"] == "5"
+        assert result[0]["code_sha256"] == "sha-5"
+        assert result[0]["runtime"] == "python3.12"
+        assert result[1]["version"] == "4"
+
+    @patch('src.repositories.observability_repository.datetime')
+    def test_filters_by_time_window(self, mock_datetime, obs_repo, mock_lambda):
+        """Only returns versions within lookback_minutes."""
+        # Fix current time to 2026-03-30T13:00:00
+        mock_datetime.now.return_value = datetime(2026, 3, 30, 13, 0, 0, tzinfo=timezone.utc)
+        mock_datetime.fromisoformat = datetime.fromisoformat
+
+        mock_lambda.list_versions_by_function.return_value = {
+            "Versions": [
+                {
+                    "Version": "3",
+                    "LastModified": "2026-03-30T12:50:00.000+0000",  # 10 min ago (within 60 min window)
+                    "CodeSha256": "sha-3",
+                    "Runtime": "python3.12",
+                    "MemorySize": 512,
+                    "Timeout": 30,
+                },
+                {
+                    "Version": "2",
+                    "LastModified": "2026-03-30T10:00:00.000+0000",  # 3 hours ago (outside window)
+                    "CodeSha256": "sha-2",
+                    "Runtime": "python3.12",
+                    "MemorySize": 512,
+                    "Timeout": 30,
+                },
+            ]
+        }
+
+        result = obs_repo.get_recent_deployments("test-function", lookback_minutes=60)
+
+        assert len(result) == 1
+        assert result[0]["version"] == "3"
+
+    @patch('src.repositories.observability_repository.datetime')
+    def test_sorts_by_timestamp_descending(self, mock_datetime, obs_repo, mock_lambda):
+        """Most recent version first."""
+        # Fix current time to 2026-03-30T12:30:00
+        mock_datetime.now.return_value = datetime(2026, 3, 30, 12, 30, 0, tzinfo=timezone.utc)
+        mock_datetime.fromisoformat = datetime.fromisoformat
+
+        mock_lambda.list_versions_by_function.return_value = {
+            "Versions": [
+                {
+                    "Version": "1",
+                    "LastModified": "2026-03-30T12:00:00.000+0000",
+                    "CodeSha256": "sha-1",
+                    "Runtime": "python3.12",
+                    "MemorySize": 512,
+                    "Timeout": 30,
+                },
+                {
+                    "Version": "3",
+                    "LastModified": "2026-03-30T12:20:00.000+0000",
+                    "CodeSha256": "sha-3",
+                    "Runtime": "python3.12",
+                    "MemorySize": 512,
+                    "Timeout": 30,
+                },
+                {
+                    "Version": "2",
+                    "LastModified": "2026-03-30T12:10:00.000+0000",
+                    "CodeSha256": "sha-2",
+                    "Runtime": "python3.12",
+                    "MemorySize": 512,
+                    "Timeout": 30,
+                },
+            ]
+        }
+
+        result = obs_repo.get_recent_deployments("test-function", lookback_minutes=60)
+
+        assert result[0]["version"] == "3"  # Most recent
+        assert result[1]["version"] == "2"
+        assert result[2]["version"] == "1"
+
+    @patch('src.repositories.observability_repository.datetime')
+    def test_limits_to_10_results(self, mock_datetime, obs_repo, mock_lambda):
+        """Returns max 10 deployments."""
+        # Fix current time to 2026-03-30T12:30:00
+        mock_datetime.now.return_value = datetime(2026, 3, 30, 12, 30, 0, tzinfo=timezone.utc)
+        mock_datetime.fromisoformat = datetime.fromisoformat
+
+        versions = [
+            {
+                "Version": str(i),
+                "LastModified": "2026-03-30T12:00:00.000+0000",
+                "CodeSha256": f"sha-{i}",
+                "Runtime": "python3.12",
+                "MemorySize": 512,
+                "Timeout": 30,
+            }
+            for i in range(1, 16)  # 15 versions
+        ]
+        mock_lambda.list_versions_by_function.return_value = {"Versions": versions}
+
+        result = obs_repo.get_recent_deployments("test-function", lookback_minutes=60)
+
+        assert len(result) == 10
+
+    def test_skips_latest_pseudo_version(self, obs_repo, mock_lambda):
+        """$LATEST is always excluded."""
+        mock_lambda.list_versions_by_function.return_value = {
+            "Versions": [
+                {
+                    "Version": "$LATEST",
+                    "LastModified": "2026-03-30T12:30:00.000+0000",
+                    "CodeSha256": "sha-latest",
+                    "Runtime": "python3.12",
+                    "MemorySize": 512,
+                    "Timeout": 30,
+                },
+            ]
+        }
+
+        result = obs_repo.get_recent_deployments("test-function")
+
+        assert len(result) == 0
+
+    def test_handles_missing_timestamp(self, obs_repo, mock_lambda):
+        """Skips versions with missing LastModified."""
+        mock_lambda.list_versions_by_function.return_value = {
+            "Versions": [
+                {
+                    "Version": "1",
+                    # Missing LastModified
+                    "CodeSha256": "sha-1",
+                    "Runtime": "python3.12",
+                    "MemorySize": 512,
+                    "Timeout": 30,
+                },
+            ]
+        }
+
+        result = obs_repo.get_recent_deployments("test-function")
+
+        assert len(result) == 0
+
+    def test_returns_empty_on_exception(self, obs_repo, mock_lambda):
+        """Returns empty list when API call fails."""
+        mock_lambda.list_versions_by_function.side_effect = Exception("Function not found")
+
+        result = obs_repo.get_recent_deployments("nonexistent-function")
+
+        assert result == []

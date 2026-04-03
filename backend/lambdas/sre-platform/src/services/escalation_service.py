@@ -36,6 +36,7 @@ class EscalationService:
         ai_service=None,
         region: str = "us-west-2",
         delta_report_service=None,
+        metrics_collection_service=None,
     ):
         self._correlation = correlation_repo
         self._log_analysis = log_analysis_service
@@ -45,6 +46,7 @@ class EscalationService:
         self._ai_service = ai_service
         self._region = region
         self._delta_report = delta_report_service
+        self._metrics_service = metrics_collection_service
 
     @observe(operation="escalate_incident", metric_prefix="escalation")
     def escalate(
@@ -64,6 +66,7 @@ class EscalationService:
         remediation_outcome: str = "",
         log_analysis: str = "",
         recovery_model: str = "stateless",
+        alarm_name: str = "",
     ) -> str:
         """Main entry point. Returns 'escalated'.
 
@@ -81,6 +84,23 @@ class EscalationService:
         existing = self._correlation.get(incident_key)
         if existing:
             self._correlation.update(existing.to_status(CorrelationStatus.ESCALATED))
+
+        # Step 1.5: Collect metrics timeline (Detection baseline vs Current state)
+        detection_metrics = None
+        current_metrics = None
+        if self._metrics_service and existing:
+            detection_metrics = existing.metrics
+            effective_fn = function_name or build_function_name(service, stage)
+            try:
+                current_metrics = self._metrics_service.collect_incident_metrics(
+                    incident_key=incident_key,
+                    function_name=effective_fn,
+                    alarm_name=alarm_name,
+                    lookback_minutes=15,
+                    force_refresh=True,
+                )
+            except Exception:
+                pass
 
         # Step 2: Collect diagnostic data
         effective_fn = function_name or build_function_name(service, stage)
@@ -105,6 +125,8 @@ class EscalationService:
                     remediation_outcome=remediation_outcome,
                     verification=verification,
                     log_analysis=log_analysis,
+                    detection_metrics=detection_metrics,
+                    current_metrics=current_metrics,
                 )
                 if ai_result:
                     ai_analysis = ai_result["text"]
@@ -128,6 +150,8 @@ class EscalationService:
             ai_analysis=ai_analysis,
             ai_references=ai_references,
             region=self._region,
+            detection_metrics=detection_metrics,
+            current_metrics=current_metrics,
         )
         self._ticketing.add_jira_comment_adf(jira_ticket_id, adf_content)
 

@@ -16,11 +16,11 @@
 
 ### Context: EventBridge in the Incident Manager
 
-The incident-manager uses EventBridge to orchestrate between Lambdas:
+The sre-platform uses EventBridge to orchestrate between Lambdas:
 - Detection Lambda → publishes `IncidentCreated` event → triggers Triage Lambda
 - Triage Lambda → publishes `TriageComplete` event → triggers Escalation Lambda
 
-Source: `incident-manager` (from `incident_config.json: eventbridge_source`)
+Source: `sre-platform` (from `incident_config.json: eventbridge_source`)
 
 ---
 
@@ -73,8 +73,8 @@ aws events list-targets-by-rule --rule {rule-name}
 
 # Test event pattern matching
 aws events test-event-pattern \
-  --event-pattern '{"source":["incident-manager"]}' \
-  --event '{"source":"incident-manager","detail-type":"IncidentCreated","detail":{}}'
+  --event-pattern '{"source":["sre-platform"]}' \
+  --event '{"source":"sre-platform","detail-type":"IncidentCreated","detail":{}}'
 ```
 
 **CloudTrail audit (who published what):**
@@ -146,10 +146,10 @@ ALARM FIRES
 
 **Event pattern matching is exact**: `{"detail-type": ["IncidentCreated"]}` will NOT match `{"detail-type": "incidentcreated"}`. Case-sensitive, no wildcards on field values (only prefix matching with `prefix`).
 
-**PutEvents limit**: 10,000 entries per second per account per region (soft limit). Storm detection in the incident-manager (`storm_detection.threshold: 5` in `storm_detection.window_seconds: 120`) prevents flooding.
+**PutEvents limit**: 10,000 entries per second per account per region (soft limit). Storm detection in the sre-platform (`storm_detection.threshold: 5` in `storm_detection.window_seconds: 120`) prevents flooding.
 
 **Cross-account / cross-region**: If rules target resources in other accounts, both the rule and the target need explicit permissions. Missing cross-account permissions cause silent FailedInvocations.
 
 **Archive and replay**: EventBridge can archive events and replay them. Use this for incident recovery instead of custom DLQ redrive when full event replay is needed.
 
-**Ordering**: EventBridge does not guarantee ordering. If the incident-manager depends on `IncidentCreated` arriving before `TriageComplete`, design for idempotency and out-of-order handling (which is already implemented via `CorrelationRecord`).
+**Ordering**: EventBridge does not guarantee ordering. If the sre-platform depends on `IncidentCreated` arriving before `TriageComplete`, design for idempotency and out-of-order handling (which is already implemented via `CorrelationRecord`).

@@ -30,6 +30,9 @@ class CorrelationRecord:
         created_at: UTC timestamp when the record was first reserved.
         ttl: DynamoDB Time-To-Live (epoch seconds). Records are automatically deleted
             by DynamoDB after this time to keep the table size manageable.
+        metrics: Metrics bundle from MetricsCollectionService (Phase 2 enhancement).
+            Contains alarm_metrics, lambda_metrics, deployments, and enrichment.
+        metrics_collected_at: UTC timestamp when metrics were collected (Phase 2).
     """
 
     incident_key: str
@@ -37,7 +40,9 @@ class CorrelationRecord:
     severity: str
     status: CorrelationStatus
     created_at: datetime
-    ttl: int  # Epoch seconds
+    ttl: int
+    metrics: dict | None = None
+    metrics_collected_at: datetime | None = None
 
     @classmethod
     def reserve(
@@ -129,6 +134,23 @@ class CorrelationRecord:
         ttl = int((resolved_at + timedelta(seconds=grace_period_seconds)).timestamp())
         return replace(self, status=CorrelationStatus.GRACE, ttl=ttl)
 
+    def with_metrics(self, metrics: dict, collected_at: datetime) -> "CorrelationRecord":
+        """Stores metrics bundle in the record (Phase 2 enhancement).
+
+        Used by MetricsCollectionService to cache metrics in DynamoDB.
+        Enables metrics reuse across Detection → Triage → Escalation workflow
+        and supports timeline comparison (Detection T0 vs Escalation T+N).
+
+        Args:
+            metrics: Full metrics bundle from MetricsCollectionService containing
+                alarm_metrics, lambda_metrics, deployments, and enrichment.
+            collected_at: Timestamp when metrics were collected.
+
+        Returns:
+            A new CorrelationRecord instance with metrics stored.
+        """
+        return replace(self, metrics=metrics, metrics_collected_at=collected_at)
+
     def to_dynamodb_item(self) -> dict:
         """Converts the model to a DynamoDB-compatible dictionary.
 
@@ -137,11 +159,13 @@ class CorrelationRecord:
         - gsi_pk: Fixed 'ALL' partition key used by the 'created_at-index' GSI.
           This enables efficient time-range queries across all incidents for storm detection.
         - created_at: ISO 8601 string for human readability and GSI sort key queries.
+        - metrics: Optional metrics bundle (Phase 2). Only included if present.
+        - metrics_collected_at: ISO 8601 timestamp (Phase 2). Only included if metrics present.
 
         Returns:
             A dictionary containing the DynamoDB item attributes.
         """
-        return {
+        item = {
             "incident_key": self.incident_key,
             "jira_ticket_id": self.jira_ticket_id or "",
             "severity": self.severity,
@@ -150,6 +174,12 @@ class CorrelationRecord:
             "ttl": self.ttl,
             "gsi_pk": "ALL",
         }
+
+        if self.metrics:
+            item["metrics"] = self.metrics
+            item["metrics_collected_at"] = self.metrics_collected_at.isoformat()
+
+        return item
 
     @classmethod
     def from_dynamodb_item(cls, item: dict) -> "CorrelationRecord":
@@ -162,6 +192,12 @@ class CorrelationRecord:
             A reconstructed CorrelationRecord instance.
         """
         jira_ticket_id = item.get("jira_ticket_id", "")
+
+        metrics = item.get("metrics")
+        metrics_collected_at = None
+        if item.get("metrics_collected_at"):
+            metrics_collected_at = datetime.fromisoformat(item["metrics_collected_at"])
+
         return cls(
             incident_key=item["incident_key"],
             jira_ticket_id=jira_ticket_id if jira_ticket_id else None,
@@ -169,4 +205,6 @@ class CorrelationRecord:
             status=CorrelationStatus(item["status"]),
             created_at=datetime.fromisoformat(item["created_at"]),
             ttl=int(item["ttl"]),
+            metrics=metrics,
+            metrics_collected_at=metrics_collected_at,
         )

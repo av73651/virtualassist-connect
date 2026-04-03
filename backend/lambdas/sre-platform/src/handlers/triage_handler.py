@@ -147,6 +147,7 @@ def lambda_handler(event: dict, context) -> dict:
         function_name = detail.get("function_name", "")
         log_group = detail.get("log_group", "")
         metric_name = detail.get("metric_name", "")
+        metrics = detail.get("metrics")  # Detection baseline (T0)
 
         status = _triage_service.triage(
             incident_key=incident_key,
@@ -161,6 +162,7 @@ def lambda_handler(event: dict, context) -> dict:
             function_name=function_name,
             log_group=log_group,
             metric_name=metric_name,
+            metrics=metrics,
         )
 
         return {

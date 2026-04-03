@@ -19,13 +19,13 @@ description: "EventBridge incident patterns — failed invocations, DLQ depth, r
 | `invocation-latency` | InvocationCreated to target execution — Custom | p99 | high | 5000ms | 60s × 5 |
 | `matched-events` | MatchedEvents — AWS/Events | Sum | low | 50% below baseline | 300s × 3 |
 
-### Context: EventBridge in the Incident Manager
+### Context: EventBridge in the SRE Platform
 
-The incident-manager uses EventBridge to orchestrate between Lambdas:
+The SRE platform uses EventBridge to orchestrate between Lambdas:
 - Detection Lambda → publishes `IncidentCreated` event → triggers Triage Lambda
 - Triage Lambda → publishes `TriageComplete` event → triggers Escalation Lambda
 
-Source: `incident-manager` (from `incident_config.json: eventbridge_source`)
+Source: `sre.incident-detection` (from `incident_config.json: eventbridge_source`)
 
 ---
 
@@ -78,8 +78,8 @@ aws events list-targets-by-rule --rule {rule-name}
 
 # Test event pattern matching
 aws events test-event-pattern \
-  --event-pattern '{"source":["incident-manager"]}' \
-  --event '{"source":"incident-manager","detail-type":"IncidentCreated","detail":{}}'
+  --event-pattern '{"source":["sre.incident-detection"]}' \
+  --event '{"source":"sre.incident-detection","detail-type":"IncidentCreated","detail":{}}'
 ```
 
 **CloudTrail audit (who published what):**
@@ -159,10 +159,10 @@ ALARM FIRES
 
 **Event pattern matching is exact**: `{"detail-type": ["IncidentCreated"]}` will NOT match `{"detail-type": "incidentcreated"}`. Case-sensitive, no wildcards on field values (only prefix matching with `prefix`).
 
-**PutEvents limit**: 10,000 entries per second per account per region (soft limit). Storm detection in the incident-manager (`storm_detection.threshold: 5` in `storm_detection.window_seconds: 120`) prevents flooding.
+**PutEvents limit**: 10,000 entries per second per account per region (soft limit). Storm detection in the SRE platform (`storm_detection.threshold: 5` in `storm_detection.window_seconds: 120`) prevents flooding.
 
 **Cross-account / cross-region**: If rules target resources in other accounts, both the rule and the target need explicit permissions. Missing cross-account permissions cause silent FailedInvocations.
 
 **Archive and replay**: EventBridge can archive events and replay them. Use this for incident recovery instead of custom DLQ redrive when full event replay is needed.
 
-**Ordering**: EventBridge does not guarantee ordering. If the incident-manager depends on `IncidentCreated` arriving before `TriageComplete`, design for idempotency and out-of-order handling (which is already implemented via `CorrelationRecord`).
+**Ordering**: EventBridge does not guarantee ordering. If the SRE platform depends on `IncidentCreated` arriving before `TriageComplete`, design for idempotency and out-of-order handling (which is already implemented via `CorrelationRecord`).

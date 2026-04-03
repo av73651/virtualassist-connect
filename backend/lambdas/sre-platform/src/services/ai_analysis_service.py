@@ -75,6 +75,7 @@ class AIAnalysisService:
         stage: str = "",
         service_context: str = "",
         metric_name: str = "",
+        metrics: dict | None = None,
     ) -> dict | None:
         """Classify root cause and return combined AI analysis.
 
@@ -85,6 +86,7 @@ class AIAnalysisService:
             error_data, service_type, alarm_type, resource_identifier, stage,
             service_context=service_context,
             metric_name=metric_name,
+            metrics=metrics,
         )
 
         response = self._query_kb(query)
@@ -111,6 +113,8 @@ class AIAnalysisService:
         remediation_outcome: str = "",
         verification: dict | None = None,
         log_analysis: str = "",
+        detection_metrics: dict | None = None,
+        current_metrics: dict | None = None,
     ) -> dict | None:
         """Analyze incident for escalation.
 
@@ -123,6 +127,9 @@ class AIAnalysisService:
         remediation_summary = self._build_remediation_summary(
             remediation_outcome, reason, root_cause, verification,
         )
+
+        # Format metrics timeline (Phase 2)
+        metrics_timeline = self._format_metrics_timeline(detection_metrics, current_metrics)
 
         query = self._escalation_prompt.format(
             function_name=function_name,
@@ -138,6 +145,7 @@ class AIAnalysisService:
             error_count=len(error_logs),
             pattern_summary=pattern_summary,
             sample_errors="\n".join(f"  - {s}" for s in samples),
+            metrics_timeline=metrics_timeline,
         )
 
         response = self._query_kb(query)
@@ -243,6 +251,7 @@ class AIAnalysisService:
         stage: str,
         service_context: str = "",
         metric_name: str = "",
+        metrics: dict | None = None,
     ) -> str:
         """Build structured query from error data for classification."""
         patterns = error_data.get("error_patterns", {})
@@ -254,6 +263,9 @@ class AIAnalysisService:
         ) or "  (no samples available)"
 
         valid_str = ", ".join(sorted(self._valid_classifications))
+
+        # Format metrics enrichment (Phase 2)
+        metrics_context = self._format_metrics_context(metrics) if metrics else "(no metrics available)"
 
         return self._classification_prompt.format(
             service_type=service_type,
@@ -267,6 +279,7 @@ class AIAnalysisService:
             valid_classifications=valid_str,
             service_context=service_context or "(no service architecture metadata available)",
             metric_name=metric_name or "unknown",
+            metrics_context=metrics_context,
         )
 
     def _parse_classification_response(self, response: dict) -> dict | None:
@@ -295,8 +308,6 @@ class AIAnalysisService:
             "automation_level": parsed.get("automation_level", "manual"),
             "reasoning": parsed.get("reasoning", ""),
             "log_analysis": parsed.get("log_analysis", ""),
-            "blast_radius": parsed.get("blast_radius", ""),
-            "verification_guidance": parsed.get("verification_guidance", ""),
         }
 
     @staticmethod
@@ -367,3 +378,86 @@ class AIAnalysisService:
         """Load prompt template from prompts directory."""
         with open(f"{_PROMPTS_DIR}/{filename}") as f:
             return f.read()
+
+    @staticmethod
+    def _format_metrics_context(metrics: dict) -> str:
+        """Format metrics enrichment for classification prompt (Detection baseline).
+
+        Provides hard evidence for AI reasoning:
+        - Alarm datapoints (time series) to validate alarm state
+        - Invocation volume for blast radius assessment
+        - Deployment signal for bad-deployment detection"""
+        enrichment = metrics.get("enrichment", {})
+        alarm_metrics = metrics.get("alarm_metrics", {})
+        lambda_metrics = metrics.get("lambda_metrics", {})
+        deployments = metrics.get("deployments", [])
+
+        # Alarm configuration and threshold
+        alarm_config = alarm_metrics.get("alarm_config", {})
+        threshold = alarm_config.get("threshold", 0.0)
+        eval_periods = alarm_config.get("evaluation_periods", 0)
+        datapoints_to_alarm = alarm_config.get("datapoints_to_alarm", 0)
+        comparison_op = alarm_config.get("comparison_operator", "")
+
+        # Alarm datapoints (last 10 for trend visibility)
+        datapoints = alarm_metrics.get("datapoints", [])
+        datapoint_str = ""
+        if datapoints:
+            recent = datapoints[-10:]  # Last 10 datapoints
+            datapoint_str = "\n".join(
+                f"    {dp['timestamp'][-8:]} → {dp['value']:.2f}"  # Show HH:MM:SS and value
+                for dp in recent
+            )
+        else:
+            datapoint_str = "    (no datapoints available)"
+
+        # Invocation volume (for blast radius)
+        invocations = lambda_metrics.get("invocations", 0)
+        errors = lambda_metrics.get("errors", 0)
+        error_rate = lambda_metrics.get("error_rate", 0.0)
+
+        # Deployment signal (explicit)
+        deployment_detected = enrichment.get("recent_deployment_detected", False)
+        deployment_version = enrichment.get("recent_deployment_version", "none")
+        deployment_delta = enrichment.get("deployment_time_delta_minutes", 0)
+        deployment_correlation = enrichment.get("deployment_correlation", "none")
+
+        return f"""Alarm Configuration:
+  - Threshold: {threshold} ({comparison_op})
+  - Evaluation: {datapoints_to_alarm}/{eval_periods} datapoints
+  - Threshold exceeded: {enrichment.get('alarm_threshold_exceeded', False)}
+
+Alarm Datapoints (last 10):
+{datapoint_str}
+
+Lambda Metrics (last 15 min):
+  - Invocations: {invocations}
+  - Errors: {errors}
+  - Error rate: {error_rate:.2f}%
+  - Error trend: {enrichment.get('error_rate_trend', 'unknown')}
+
+Deployment Signal:
+  - Recent deployment detected: {deployment_detected}
+  - Version: {deployment_version}
+  - Time since deploy: {deployment_delta} minutes ago
+  - Deployment-error correlation: {deployment_correlation}"""
+
+    @staticmethod
+    def _format_metrics_timeline(detection_metrics: dict | None, current_metrics: dict | None) -> str:
+        """Format metrics timeline comparison for escalation prompt (T0 vs T+N)."""
+        if not detection_metrics or not current_metrics:
+            return "(no metrics timeline available)"
+
+        from src.domain.jira_formatting import trend_arrow
+
+        det_enrich = detection_metrics.get("enrichment", {})
+        cur_enrich = current_metrics.get("enrichment", {})
+
+        det_error_rate = det_enrich.get("current_metric_value", 0.0)
+        cur_error_rate = cur_enrich.get("current_metric_value", 0.0)
+        trend_symbol = trend_arrow(det_error_rate, cur_error_rate)
+
+        return f"""Detection (T0) → Current (T+N):
+  - Error rate: {det_error_rate:.1f}% → {cur_error_rate:.1f}% {trend_symbol}
+  - Error trend: {det_enrich.get('error_rate_trend', 'unknown')} → {cur_enrich.get('error_rate_trend', 'unknown')}
+  - Deployment correlation: {det_enrich.get('deployment_correlation', 'none')} → {cur_enrich.get('deployment_correlation', 'none')}"""

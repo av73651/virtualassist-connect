@@ -141,7 +141,7 @@ ALARM FIRES
 
 **GSI capacity is independent**: A GSI has its own provisioned capacity. Base table writes can succeed while GSI updates throttle, causing eventual consistency lag.
 
-**Conditional writes and idempotency**: `ConditionalCheckFailedException` is expected in idempotent patterns (reserve-then-create). High volumes are normal for the incident-manager's `CorrelationRecord.reserve()` — don't alert on these.
+**Conditional writes and idempotency**: `ConditionalCheckFailedException` is expected in idempotent patterns (reserve-then-create). High volumes are normal for the SRE platform's `CorrelationRecord.reserve()` — don't alert on these.
 
 **Item size limits**: Max 400KB per item. Approaching limits causes latency spikes on reads (RCU consumption = ceiling(item_size / 4KB)).
 

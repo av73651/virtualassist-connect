@@ -119,6 +119,7 @@ def lambda_handler(event: dict, context) -> dict:
         remediation_outcome = detail.get("remediation_outcome", "")
         log_analysis = detail.get("log_analysis", "")
         recovery_model = detail.get("recovery_model", "stateless")
+        alarm_name = detail.get("alarm_name", "")  # For metrics collection
 
         status = _escalation_service.escalate(
             incident_key=incident_key,
@@ -136,6 +137,7 @@ def lambda_handler(event: dict, context) -> dict:
             remediation_outcome=remediation_outcome,
             log_analysis=log_analysis,
             recovery_model=recovery_model,
+            alarm_name=alarm_name,
         )
 
         return {

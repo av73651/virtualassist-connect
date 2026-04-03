@@ -51,3 +51,21 @@ class EscalationReason(str, Enum):
     INCIDENT_STORM = "incident-storm"
     GRACE_RECURRENCE = "grace-period-recurrence"
     TRIAGE_TIMEOUT = "triage-timeout"
+    RECENT_DEPLOYMENT = "recent-deployment"
+    ALARM_MISCONFIGURATION = "alarm-misconfiguration"
+
+
+class ErrorRateTrend(str, Enum):
+    """Error rate trend classification for metrics enrichment."""
+    INCREASING = "increasing"
+    STABLE = "stable"
+    DECREASING = "decreasing"
+    UNKNOWN = "unknown"
+
+
+class DeploymentCorrelation(str, Enum):
+    """Deployment-error correlation strength for incident enrichment."""
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    NONE = "none"

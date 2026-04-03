@@ -41,7 +41,6 @@ class IncidentReporter:
         evidence: str,
         blast_radius: dict,
         log_analysis: str | None = None,
-        verification_guidance: str | None = None,
         references: list[dict] | None = None,
     ) -> None:
         # Core classification info
@@ -49,23 +48,18 @@ class IncidentReporter:
             f"Root cause classified as {root_cause} ({confidence}).",
         ]
 
-        # Blast radius — AI or heuristic
-        if blast_radius.get("source") == "ai":
-            parts.append(f"Blast radius (AI): {blast_radius.get('ai_assessment', 'unknown')}.")
-        else:
-            parts.append(
-                f"Blast radius: {blast_radius.get('affected_users', 'unknown')} users, "
-                f"{blast_radius.get('error_rate', 'unknown')} error rate, "
-                f"duration: {blast_radius.get('duration', 'unknown')}."
-            )
+        # Blast radius — heuristic assessment
+        parts.append(
+            f"Blast radius: {blast_radius.get('affected_users', 'unknown')} users, "
+            f"{blast_radius.get('error_rate', 'unknown')} error rate, "
+            f"duration: {blast_radius.get('duration', 'unknown')}."
+        )
 
         parts.append(f"Evidence: {evidence}")
 
         # AI-enriched fields
         if log_analysis:
             parts.append(f"\nLog Analysis: {log_analysis}")
-        if verification_guidance:
-            parts.append(f"\nVerification Guidance: {verification_guidance}")
         if references:
             ref_lines = ", ".join(ref.get("source", "") for ref in references)
             parts.append(f"\nKB References: {ref_lines}")
@@ -107,6 +101,37 @@ class IncidentReporter:
         self._ticketing.add_jira_comment(
             jira_ticket_id,
             "All verification checks passed. Incident auto-resolved.",
+        )
+
+    @observe(operation="report_deployment_correlation", metric_prefix="reporter")
+    def report_deployment_correlation(
+        self, jira_ticket_id: str, deployment_version: str, delta_minutes: int, trend: str
+    ) -> None:
+        self._ticketing.add_jira_comment(
+            jira_ticket_id,
+            f"Deployment correlation detected (high confidence). "
+            f"Version {deployment_version} deployed {delta_minutes} minutes before alarm. "
+            f"Error rate trend: {trend}. Consider rollback.",
+        )
+
+    @observe(operation="report_alarm_misconfiguration", metric_prefix="reporter")
+    def report_alarm_misconfiguration(
+        self, jira_ticket_id: str, alarm_name: str, threshold: float, current_value: float
+    ) -> None:
+        self._ticketing.add_jira_comment(
+            jira_ticket_id,
+            f"Alarm threshold validation failed. "
+            f"Alarm: {alarm_name}, Threshold: {threshold}, Current: {current_value}. "
+            f"Alarm may be misconfigured or metric lag detected.",
+        )
+
+    @observe(operation="report_trend_analysis", metric_prefix="reporter")
+    def report_trend_analysis(
+        self, jira_ticket_id: str, trend: str, interpretation: str
+    ) -> None:
+        self._ticketing.add_jira_comment(
+            jira_ticket_id,
+            f"Error rate trend: {trend}. {interpretation}",
         )
 
     # ------------------------------------------------------------------ #

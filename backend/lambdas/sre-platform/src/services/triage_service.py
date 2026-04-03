@@ -56,6 +56,7 @@ class TriageService:
         function_name: str = "",
         log_group: str = "",
         metric_name: str = "",
+        metrics: dict | None = None,
     ) -> str:
         """Main entry point. Returns 'auto-resolved' or 'escalated'.
 
@@ -64,6 +65,7 @@ class TriageService:
         2. Report triage started
         3. Analyze logs -> classify root cause -> assess blast radius
         4. Report analysis results
+        4.5. Apply metrics-based escalation rules (Phase 2)
         5. Storm/timeout gates -> escalate if triggered
         6. Delegate remediation + verification -> escalate on failure
         7. Resolve: report + close ticket + GRACE + recovery + publish event"""
@@ -105,37 +107,88 @@ class TriageService:
             stage=stage,
             service_context=service_context,
             metric_name=metric_name,
+            metrics=metrics,
         )
 
         root_cause = classification_result["root_cause"]
         confidence = classification_result["confidence"]
         evidence = classification_result["evidence"]
 
-        # Blast radius: prefer AI assessment, fall back to heuristic
-        ai_blast_radius = classification_result.get("blast_radius")
-        blast_radius = (
-            {"ai_assessment": ai_blast_radius, "source": "ai"}
-            if ai_blast_radius
-            else self._assess_blast_radius(error_data)
-        )
+        # Blast radius: use heuristic assessment (detailed analysis in escalation)
+        blast_radius = self._assess_blast_radius(error_data)
 
         # Step 4: Report analysis results
         self._reporter.report_analysis_results(
             jira_ticket_id, root_cause, confidence, evidence, blast_radius,
             log_analysis=classification_result.get("log_analysis"),
-            verification_guidance=classification_result.get("verification_guidance"),
             references=classification_result.get("references", []),
         )
 
         # Build enriched escalation context
+        effective_alarm = alarm_name or derive_alarm_name(incident_key)
         escalation_context = {
             "root_cause": root_cause,
             "confidence": confidence,
             "service_type": service_type,
             "alarm_type": alarm_type,
             "function_name": effective_fn,
+            "alarm_name": effective_alarm,
             "log_analysis": classification_result.get("log_analysis", ""),
         }
+
+        # Step 4.5: Metrics-based escalation rules (Phase 2)
+        if metrics:
+            enrichment = metrics.get("enrichment", {})
+
+            # Rule MER-1: Recent deployment with high error correlation
+            if enrichment.get("deployment_correlation") == "high":
+                deployment_version = enrichment.get("recent_deployment_version")
+                delta_min = enrichment.get("deployment_time_delta_minutes", 0)
+
+                self._reporter.report_deployment_correlation(
+                    jira_ticket_id,
+                    deployment_version,
+                    delta_min,
+                    enrichment.get("error_rate_trend"),
+                )
+
+                return self._escalate(
+                    escalation_base,
+                    EscalationReason.RECENT_DEPLOYMENT,
+                    remediation_outcome="not-attempted",
+                    deployment_version=deployment_version,
+                    deployment_delta_minutes=delta_min,
+                    **escalation_context,
+                )
+
+            # Rule MER-2: Alarm threshold NOT exceeded (false alarm / metric lag)
+            if not enrichment.get("alarm_threshold_exceeded"):
+                threshold = enrichment.get("alarm_threshold_value", 0.0)
+                current = enrichment.get("current_metric_value", 0.0)
+
+                self._reporter.report_alarm_misconfiguration(
+                    jira_ticket_id,
+                    alarm_name or derive_alarm_name(incident_key),
+                    threshold,
+                    current,
+                )
+
+                return self._escalate(
+                    escalation_base,
+                    EscalationReason.ALARM_MISCONFIGURATION,
+                    remediation_outcome="not-attempted",
+                    alarm_threshold=threshold,
+                    current_metric_value=current,
+                    **escalation_context,
+                )
+
+            # Trend flag: Error rate decreasing (self-healing observed)
+            if enrichment.get("error_rate_trend") == "decreasing":
+                self._reporter.report_trend_analysis(
+                    jira_ticket_id,
+                    "decreasing",
+                    "System appears to be self-healing. Monitoring remediation urgency.",
+                )
 
         # Step 5a: Storm override -> escalate
         if storm_detected:
@@ -153,7 +206,6 @@ class TriageService:
             )
 
         # Step 6: Remediate + verify
-        effective_alarm = alarm_name or derive_alarm_name(incident_key)
         wait_seconds = self._config.verification_wait_seconds.get(severity, 60)
 
         ai_recommended_action = classification_result.get("recommended_action")
@@ -275,6 +327,7 @@ class TriageService:
         stage: str = "",
         service_context: str = "",
         metric_name: str = "",
+        metrics: dict | None = None,
     ) -> dict:
         """Classify root cause: AI service first, then rule-based fallback.
 
@@ -285,6 +338,7 @@ class TriageService:
                     error_data, service_type, alarm_type, resource_identifier, stage,
                     service_context=service_context,
                     metric_name=metric_name,
+                    metrics=metrics,
                 )
                 if result is not None:
                     return {
@@ -294,8 +348,6 @@ class TriageService:
                         "recommended_action": result.get("recommended_action"),
                         "automation_level": result.get("automation_level"),
                         "log_analysis": result.get("log_analysis"),
-                        "blast_radius": result.get("blast_radius"),
-                        "verification_guidance": result.get("verification_guidance"),
                         "references": result.get("references", []),
                     }
             except Exception:
@@ -309,8 +361,6 @@ class TriageService:
             "recommended_action": None,
             "automation_level": None,
             "log_analysis": None,
-            "blast_radius": None,
-            "verification_guidance": None,
             "references": [],
         }
 

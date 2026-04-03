@@ -226,7 +226,7 @@ The Detection Lambda SHALL publish `IncidentCreated` to EventBridge after succes
 
 ```json
 {
-  "source": "incident-manager",
+  "source": "sre.incident-detection",
   "detail-type": "IncidentCreated",
   "detail": {
     "incident_key": "payments-error-rate-prod",
@@ -613,7 +613,7 @@ Required structured log fields:
   - Leg 3: `escalation_reason`
 
 ### NFR-002: Security
-Jira API credentials SHALL be stored in AWS Secrets Manager (`incident-manager/jira-credentials`) and never in code, config, or environment variables. Each Lambda IAM role SHALL follow least-privilege (scoped to only the AWS resources it needs).
+Jira API credentials SHALL be stored in AWS Secrets Manager (`sre-platform/jira-credentials`) and never in code, config, or environment variables. Each Lambda IAM role SHALL follow least-privilege (scoped to only the AWS resources it needs).
 
 ### NFR-003: Reliability
 Failure in any processing step (Jira, log collection, SNS, remediation) SHALL NOT prevent other steps from executing. External integration methods return None/False on failure -- callers decide how to proceed. Each pipeline leg runs in its own Lambda with independent failure boundaries.
@@ -781,7 +781,7 @@ Synchronous sleeps are a deliberate trade-off: simpler architecture (no Step Fun
 | Issue Type | Incident |
 | Request Type | Report a system problem |
 | Default Reporter | Service Account (incident-bot) |
-| Credentials | AWS Secrets Manager: `incident-manager/jira-credentials` |
+| Credentials | AWS Secrets Manager: `sre-platform/jira-credentials` |
 
 ## Out of Scope
 
