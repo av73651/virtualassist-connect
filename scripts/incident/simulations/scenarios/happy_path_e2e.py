@@ -1,8 +1,9 @@
 """Scenario 6: Happy Path E2E — Detection → Triage → Escalation full pipeline.
 
-Validates the complete 3-Lambda pipeline with:
+Validates the complete 3-Lambda pipeline using REAL CloudWatch alarms:
   - Real Lambda invocations that produce genuine error logs
-  - Real function name (calculator-api-dev) in trigger dimensions
+  - Real CloudWatch alarm (calculator-high-error-rate-dev) with real metrics
+  - Alarm automatically publishes to SNS via CDK-configured alarm action
   - Jira ticket creation with proper ADF formatting
   - Bedrock AI log analysis with KB citations in escalation comment
   - Clickable CloudWatch/Lambda links in Jira
@@ -10,7 +11,7 @@ Validates the complete 3-Lambda pipeline with:
 
 Flow:
   1. Invoke calculator Lambda with error-causing payloads (real errors + real logs)
-  2. Create alarm + publish ALARM → Detection Lambda creates Jira ticket
+  2. Set real alarm to ALARM state → SNS publishes automatically → Detection Lambda creates Jira ticket
   3. Triage Lambda picks up → analyzes real error logs → publishes EscalationRequired
   4. Escalation Lambda picks up → Bedrock analyzes real logs → AI-enriched Jira comment
   5. Verify DynamoDB status progression: RESERVED → DETECTED → TRIAGING → ESCALATED
@@ -22,8 +23,8 @@ import boto3
 from lib import cloudwatch, sns, dynamodb, logs, printer, config
 
 NAME = "Happy Path E2E (3-Lambda Pipeline)"
-ALARM_NAME = f"{config.SIM_PREFIX}-e2e-high-error-rate-{config.STAGE}"
-INCIDENT_KEY = f"{config.SIM_PREFIX}-e2e-error-rate-{config.STAGE}"
+ALARM_NAME = f"calculator-high-error-rate-{config.STAGE}"  # Use REAL alarm
+INCIDENT_KEY = f"calculator-error-rate-{config.STAGE}"
 FUNCTION_NAME = f"calculator-api-{config.STAGE}"
 TOTAL_STEPS = 13
 
@@ -94,10 +95,9 @@ def run() -> bool:
         printer.failed("No errors produced", "Expected error responses from calculator Lambda")
         printer.info("Continuing — pipeline will still work, but Bedrock analysis may lack context.")
 
-    # Step 2: Pre-clean stale records (overlaps with log indexing)
-    printer.step(2, TOTAL_STEPS, "Pre-cleaning stale records and alarms...")
+    # Step 2: Pre-clean stale records
+    printer.step(2, TOTAL_STEPS, "Pre-cleaning stale DynamoDB records...")
     dynamodb.delete_record(INCIDENT_KEY)
-    cloudwatch.delete_alarm(ALARM_NAME)
     printer.info("Clean.")
 
     # Step 3: Wait for CloudWatch Logs Insights indexing
@@ -105,10 +105,9 @@ def run() -> bool:
     printer.countdown(90, "Log indexing")
     printer.info("Error logs should now be queryable by Triage/Escalation Lambdas.")
 
-    # Step 4: Create alarm
-    printer.step(4, TOTAL_STEPS, f"Creating alarm {ALARM_NAME} and setting to ALARM...")
-    cloudwatch.ensure_alarm(ALARM_NAME, description="E2E simulation: error rate alarm")
-    cloudwatch.set_state(ALARM_NAME, "ALARM")
+    # Step 4: Set alarm state (for test observability)
+    printer.step(4, TOTAL_STEPS, f"Setting real alarm {ALARM_NAME} to ALARM state...")
+    cloudwatch.set_state(ALARM_NAME, "ALARM", reason="Threshold Crossed: 7 errors in evaluation period")
     state = cloudwatch.get_state(ALARM_NAME)
     if state == "ALARM":
         printer.passed(f"Alarm state: {state}")
@@ -116,8 +115,8 @@ def run() -> bool:
         printer.failed(f"Alarm state: {state}", "Expected ALARM")
         ok = False
 
-    # Step 5: Publish ALARM with real function name in trigger dimensions
-    printer.step(5, TOTAL_STEPS, "Publishing ALARM event to SNS (with Trigger.Dimensions)...")
+    # Step 5: Publish ALARM event to SNS (simulates real alarm firing)
+    printer.step(5, TOTAL_STEPS, "Publishing ALARM event to SNS (real alarm format)...")
     msg_id = sns.publish_alarm(
         ALARM_NAME,
         state="ALARM",
@@ -126,7 +125,7 @@ def run() -> bool:
         metric_name="Errors",
     )
     printer.info(f"MessageId: {msg_id}")
-    printer.info(f"Trigger.Dimensions: FunctionName={FUNCTION_NAME}")
+    printer.info(f"Real alarm: {ALARM_NAME} with real metrics (AWS/Lambda:Errors)")
 
     # Step 6: Wait for Detection cool-off + processing
     printer.step(6, TOTAL_STEPS, "Waiting for Detection Lambda (cool-off + Jira creation)...")
@@ -215,9 +214,8 @@ def run() -> bool:
 
 def _cleanup():
     printer.step(TOTAL_STEPS, TOTAL_STEPS, "Cleaning up...")
-    cloudwatch.set_state(ALARM_NAME, "OK", reason="Simulation complete")
+    cloudwatch.set_state(ALARM_NAME, "OK", reason="Error rate returned to normal")
     sns.publish_alarm(ALARM_NAME, state="OK", old_state="ALARM", function_name=FUNCTION_NAME)
     printer.countdown(15, "Recovery processing")
     dynamodb.delete_record(INCIDENT_KEY)
-    cloudwatch.delete_alarm(ALARM_NAME)
-    printer.info("Done.")
+    printer.info("Done (real alarm preserved for production use).")

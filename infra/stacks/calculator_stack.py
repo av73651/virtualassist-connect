@@ -5,11 +5,14 @@ This module defines the AWS infrastructure for the Calculator API using AWS CDK.
 
 from aws_cdk import (
     Stack,
+    Fn,
     aws_lambda as lambda_,
     aws_apigateway as apigw,
     aws_logs as logs,
     aws_iam as iam,
     aws_cloudwatch as cloudwatch,
+    aws_cloudwatch_actions as cw_actions,
+    aws_sns as sns,
     aws_cognito as cognito,
     aws_wafv2 as wafv2,
     Duration,
@@ -17,6 +20,7 @@ from aws_cdk import (
     RemovalPolicy
 )
 from constructs import Construct
+from constructs.sre_monitoring import add_sre_monitoring
 
 
 # Map config log_retention_days to CDK enum
@@ -467,32 +471,43 @@ class CalculatorStack(Stack):
 
     def _create_alarms(self) -> None:
         """Create CloudWatch alarms for monitoring."""
-        # High error rate alarm
-        cloudwatch.Alarm(
-            self, "HighErrorRateAlarm",
-            alarm_name=f"calculator-high-error-rate-{self.config['api_gateway']['stage_name']}",
-            metric=self.calculator_lambda.metric_errors(statistic="Sum"),
-            threshold=10,
-            evaluation_periods=2,
-            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-            alarm_description="Alert when error count exceeds threshold"
+        stage = self.config['api_gateway']['stage_name']
+
+        # SRE Platform monitoring - custom error metrics from @observe decorator
+        # This monitors ALL handled exceptions (ValidationError, DivisionByZeroError, etc.)
+        # not just unhandled Lambda crashes
+        add_sre_monitoring(
+            scope=self,
+            lambda_fn=self.calculator_lambda,
+            service_name="calculator",
+            stage=stage,
+            error_threshold=10,
+            evaluation_periods=2
+        )
+
+        # Additional monitoring for performance and API Gateway errors
+        alarm_topic_arn = Fn.import_value(f"IncidentAlarmTopicArn-{stage}")
+        alarm_topic = sns.Topic.from_topic_arn(
+            self, "SREAlarmTopic",
+            alarm_topic_arn
         )
 
         # High latency alarm
-        cloudwatch.Alarm(
+        high_latency_alarm = cloudwatch.Alarm(
             self, "HighLatencyAlarm",
-            alarm_name=f"calculator-high-latency-{self.config['api_gateway']['stage_name']}",
+            alarm_name=f"calculator-high-latency-{stage}",
             metric=self.calculator_lambda.metric_duration(statistic="p99"),
             threshold=500,  # 500ms
             evaluation_periods=2,
             comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
             alarm_description="Alert when p99 latency exceeds 500ms"
         )
+        high_latency_alarm.add_alarm_action(cw_actions.SnsAction(alarm_topic))
 
-        # High 4XX error rate alarm (validation errors)
-        cloudwatch.Alarm(
+        # High 4XX error rate alarm (validation errors at API Gateway level)
+        high_4xx_alarm = cloudwatch.Alarm(
             self, "High4XXErrorAlarm",
-            alarm_name=f"calculator-high-4xx-errors-{self.config['api_gateway']['stage_name']}",
+            alarm_name=f"calculator-high-4xx-errors-{stage}",
             metric=cloudwatch.Metric(
                 namespace="AWS/ApiGateway",
                 metric_name="4XXError",
@@ -504,6 +519,7 @@ class CalculatorStack(Stack):
             comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
             alarm_description="Alert when 4XX error count exceeds threshold (high validation error rate)"
         )
+        high_4xx_alarm.add_alarm_action(cw_actions.SnsAction(alarm_topic))
 
     def _create_outputs(self) -> None:
         """Create stack outputs."""
