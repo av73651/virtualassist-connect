@@ -5,6 +5,7 @@ Usage: add_sre_monitoring(self, my_lambda, "my-service", "dev")
 """
 
 from aws_cdk import (
+    Duration,
     Fn,
     aws_lambda as lambda_,
     aws_cloudwatch as cloudwatch,
@@ -57,13 +58,13 @@ def add_sre_monitoring(
     # Create alarm on custom error metrics
     alarm = cloudwatch.Alarm(
         scope,
-        f"{service_name}HighErrorRate",
-        alarm_name=f"{service_name}-high-error-rate-{stage}",
+        f"{service_name}CustomErrorRate",
+        alarm_name=f"{service_name}-custom-error-rate-{stage}",
         metric=cloudwatch.Metric(
             namespace=f"CustomMetrics/{service_name}",
             metric_name="Errors",
             statistic="Sum",
-            period=cloudwatch.Duration.minutes(5)
+            period=Duration.minutes(5)
         ),
         threshold=error_threshold,
         evaluation_periods=evaluation_periods,

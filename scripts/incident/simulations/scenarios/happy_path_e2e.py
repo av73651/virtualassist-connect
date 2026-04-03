@@ -23,8 +23,8 @@ import boto3
 from lib import cloudwatch, sns, dynamodb, logs, printer, config
 
 NAME = "Happy Path E2E (3-Lambda Pipeline)"
-ALARM_NAME = f"calculator-high-error-rate-{config.STAGE}"  # Use REAL alarm
-INCIDENT_KEY = f"calculator-error-rate-{config.STAGE}"
+ALARM_NAME = f"calculator-custom-error-rate-{config.STAGE}"  # Real alarm with custom metrics
+INCIDENT_KEY = f"calculator-custom-error-rate-{config.STAGE}"
 FUNCTION_NAME = f"calculator-api-{config.STAGE}"
 TOTAL_STEPS = 13
 

@@ -20,7 +20,7 @@ from aws_cdk import (
     RemovalPolicy
 )
 from constructs import Construct
-from constructs.sre_monitoring import add_sre_monitoring
+from sre_constructs.sre_monitoring import add_sre_monitoring
 
 
 # Map config log_retention_days to CDK enum
