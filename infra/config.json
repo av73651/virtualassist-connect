@@ -16,7 +16,7 @@
         "cors_allowed_origins": ["http://localhost:4200"],
         "log_retention_days": 7,
         "trace_sampling": "always_on",
-        "incident_manager": {
+        "sre_platform": {
             "detection_lambda": {
                 "memory_size": 512,
                 "timeout_seconds": 180
@@ -55,7 +55,7 @@
         "cors_allowed_origins": ["https://app.virtualassist.example.com"],
         "log_retention_days": 30,
         "trace_sampling": "parentbased_traceidratio",
-        "incident_manager": {
+        "sre_platform": {
             "detection_lambda": {
                 "memory_size": 1024,
                 "timeout_seconds": 180

@@ -19,11 +19,11 @@ import os
 import sys
 import time
 
-# Add the incident-manager source to path for imports
-INCIDENT_MANAGER_ROOT = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "backend", "lambdas", "incident-manager"
+# Add the sre-platform source to path for imports
+SRE_PLATFORM_ROOT = os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "backend", "lambdas", "sre-platform"
 )
-sys.path.insert(0, os.path.abspath(INCIDENT_MANAGER_ROOT))
+sys.path.insert(0, os.path.abspath(SRE_PLATFORM_ROOT))
 
 # Stub the shared middleware so we don't need OpenTelemetry installed locally
 import types
