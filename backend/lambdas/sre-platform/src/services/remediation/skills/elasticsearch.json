@@ -1,0 +1,20 @@
+{
+  "service_type": "elasticsearch",
+  "description": "OpenSearch/Elasticsearch remediation actions",
+  "namespace_patterns": ["AWS/ES", "AWS/OpenSearch"],
+  "resource_keys": {
+    "domain_name": "DomainName"
+  },
+  "actions": {
+    "opensearch-scale-up": {
+      "method": "scale_opensearch_domain",
+      "description": "Scale up OpenSearch instance type or count",
+      "params_from_context": ["domain_name"]
+    },
+    "opensearch-storage-increase": {
+      "method": "increase_opensearch_storage",
+      "description": "Increase OpenSearch EBS volume size",
+      "params_from_context": ["domain_name"]
+    }
+  }
+}

@@ -1,0 +1,30 @@
+Analyze this incident for an on-call engineer. Be concise — bullet points, not paragraphs.
+
+## Context
+Service: {service} ({stage}) | Type: {service_type} | Alarm: {alarm_type}
+Resource: {function_name} | Root cause: {root_cause} ({confidence})
+Escalation reason: {reason}
+
+## Prior Analysis
+{log_analysis}
+
+## What Was Attempted
+{remediation_summary}
+
+## Errors ({error_count} total)
+{pattern_summary}
+
+{sample_errors}
+
+## Instructions
+Respond in this exact format using the knowledge base (DECISION TREE, FAILURE MODES, DIAGNOSTICS):
+
+**Root Cause**: One sentence. What failed and why.
+
+**Immediate Actions**:
+1. [action + CLI command]
+2. [action + CLI command]
+
+**Watch For**: One sentence on cascading risks.
+
+STRICT: Under 150 words total. No preamble. No markdown headers. No explanations of what you're doing.

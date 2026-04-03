@@ -1,0 +1,26 @@
+Summarize this auto-resolved incident for the post-incident record.
+
+## Incident
+- Service: {service} ({stage})
+- Service type: {service_type}
+- Root cause: {root_cause} (confidence: {confidence})
+- Remediation action: {remediation_action}
+- Recovery model: {recovery_model}
+
+## Error Data
+- Error count: {error_count}
+- Top patterns: {pattern_summary}
+
+## AI Analysis at Triage
+{log_analysis}
+
+## What Happened
+The incident was detected via {alarm_type} alarm, automatically triaged, and resolved via {remediation_action}.
+Verification confirmed: alarm returned to OK, no new errors, error rate below threshold.
+
+## Instructions
+Write a concise post-incident summary (under 200 words) covering:
+1. What went wrong (root cause in plain language)
+2. What was done (automated action taken)
+3. Impact (duration, blast radius)
+4. Follow-up recommendations (preventive measures, if any)

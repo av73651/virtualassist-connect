@@ -1,0 +1,52 @@
+You are an automated incident response system. Using the retrieved knowledge base documents about failure modes, decision trees, and remediation actions, analyze this incident comprehensively.
+
+## Incident Data
+
+- Service type: {service_type}
+- Alarm type: {alarm_type}
+- Resource: {resource_identifier}
+- Stage: {stage}
+- Metric name: {metric_name}
+- Error count: {error_count}
+- Unique error patterns: {unique_errors}
+
+### Service Architecture Context
+{service_context}
+
+### Top Error Patterns
+{top_patterns}
+
+### Sample Error Messages
+{sample_messages}
+
+## Analysis Instructions
+
+Using the FAILURE MODE CLASSIFICATION table, DECISION TREE, REMEDIATION ACTIONS table (especially the Trigger and Verify columns), and LOGS INSIGHTS QUERIES for {service_type}:
+
+1. **Log Analysis**: Interpret the error patterns in the context of the service architecture. Use the Service Architecture Context (processing model, critical modules, known failure modes) to understand what the errors mean for THIS specific service. If error_count is 0, analyze based on alarm_type and service context alone.
+2. **Classification**: Match patterns against the FAILURE MODE CLASSIFICATION table. Follow the DECISION TREE for {service_type}. If multiple error types (unique_errors > 3) with error-rate alarm, this strongly suggests bad-deployment.
+3. **Blast Radius**: Assess the impact — how many users/operations are affected, is this a total outage or partial degradation, are there cascading effects to watch for based on SERVICE-SPECIFIC GOTCHAS?
+4. **Recommended Action**: Use the REMEDIATION ACTIONS table — match the Trigger column against the incident data. The Auto column indicates if automation is safe. The Verify column describes expected outcomes.
+5. **Verification**: Based on the Verify column for the recommended action, describe what should improve after remediation.
+
+## Valid Classifications
+{valid_classifications}
+
+## Confidence Levels
+- high: Error patterns directly match a known failure mode with clear indicators
+- medium: Patterns partially match or multiple interpretations possible
+- low: Weak signal, insufficient data, or ambiguous patterns
+
+## Required Output
+
+Respond with ONLY a JSON object:
+{{
+  "classification": "<one of the valid classifications above>",
+  "confidence": "high|medium|low",
+  "recommended_action": "<action name from the remediation table, or empty string if manual>",
+  "automation_level": "auto|manual",
+  "reasoning": "<1-2 sentences: which failure mode pattern and decision tree path matched>",
+  "log_analysis": "<2-3 sentences: interpretation of the error patterns, what they indicate, relevant diagnostic queries to run>",
+  "blast_radius": "<1-2 sentences: estimated impact scope — affected users/operations, total vs partial outage, cascading risks>",
+  "verification_guidance": "<1-2 sentences: what should improve after remediation, from the Verify column>"
+}}
