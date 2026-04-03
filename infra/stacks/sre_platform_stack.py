@@ -126,6 +126,7 @@ class SrePlatformStack(Stack):
             "AWS_LAMBDA_EXEC_WRAPPER": "/opt/otel-instrument",
             "OTEL_SERVICE_NAME": service_name,
             "OTEL_TRACES_SAMPLER": self.config.get("trace_sampling", "always_on"),
+            "OTEL_TRACES_EXPORTER": "none",  # Use X-Ray instead (tracing=lambda_.Tracing.ACTIVE)
             "OTEL_METRICS_EXPORTER": "otlp",
             "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
             "OTEL_PROPAGATORS": "tracecontext,baggage,xray",
