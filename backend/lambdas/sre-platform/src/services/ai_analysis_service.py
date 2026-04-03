@@ -399,17 +399,18 @@ class AIAnalysisService:
         datapoints_to_alarm = alarm_config.get("datapoints_to_alarm", 0)
         comparison_op = alarm_config.get("comparison_operator", "")
 
-        # Alarm datapoints (last 10 for trend visibility)
+        # Alarm datapoints (last 10 for trend visibility) — THE KEY EVIDENCE
         datapoints = alarm_metrics.get("datapoints", [])
+        metric_name = alarm_config.get("metric_name", "value").lower()
         datapoint_str = ""
         if datapoints:
             recent = datapoints[-10:]  # Last 10 datapoints
             datapoint_str = "\n".join(
-                f"    {dp['timestamp'][-8:]} → {dp['value']:.2f}"  # Show HH:MM:SS and value
+                f"  {dp['timestamp'][11:16]} {metric_name}={int(dp['value'])}"  # HH:MM errors=1
                 for dp in recent
             )
         else:
-            datapoint_str = "    (no datapoints available)"
+            datapoint_str = "  (no datapoints available)"
 
         # Invocation volume (for blast radius)
         invocations = lambda_metrics.get("invocations", 0)
@@ -422,15 +423,17 @@ class AIAnalysisService:
         deployment_delta = enrichment.get("deployment_time_delta_minutes", 0)
         deployment_correlation = enrichment.get("deployment_correlation", "none")
 
-        return f"""Alarm Configuration:
+        return f"""### ALARM TRIGGER EVIDENCE
+
+**Observed Datapoints** (last 10):
+{datapoint_str}
+
+**Alarm Configuration**:
   - Threshold: {threshold} ({comparison_op})
   - Evaluation: {datapoints_to_alarm}/{eval_periods} datapoints
   - Threshold exceeded: {enrichment.get('alarm_threshold_exceeded', False)}
 
-Alarm Datapoints (last 10):
-{datapoint_str}
-
-Lambda Metrics (last 15 min):
+**Lambda Metrics** (last 15 min):
   - Invocations: {invocations}
   - Errors: {errors}
   - Error rate: {error_rate:.2f}%

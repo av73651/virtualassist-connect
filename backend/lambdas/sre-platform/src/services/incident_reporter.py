@@ -196,6 +196,18 @@ class IncidentReporter:
             parts.append(f"\nKB References: {ref_lines}")
         self._ticketing.add_jira_comment(jira_ticket_id, "\n".join(parts))
 
+    @observe(operation="report_simulation_detected", metric_prefix="reporter")
+    def report_simulation_detected(self, jira_ticket_id: str) -> None:
+        """Add comment indicating simulation event — no further processing."""
+        comment = """**Simulation event detected.**
+
+Alarm intentionally triggered for testing purposes.
+No production impact expected.
+No automated triage or remediation will be attempted.
+
+This ticket serves as an audit trail for the simulation test."""
+        self._ticketing.add_jira_comment(jira_ticket_id, comment)
+
     @observe(operation="resolve_ticket", metric_prefix="reporter")
     def resolve_ticket(self, jira_ticket_id: str) -> None:
         self._ticketing.transition_jira_ticket(

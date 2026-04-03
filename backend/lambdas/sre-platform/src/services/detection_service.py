@@ -54,6 +54,10 @@ class DetectionService:
         severity = alarm_event.severity.value
         now = datetime.now(timezone.utc)
 
+        # Detect simulation events and short-circuit processing
+        if self._is_simulation(alarm_event):
+            return self._handle_simulation(alarm_event, now)
+
         if not self._cool_off_check(alarm_event):
             return None
 
@@ -68,6 +72,50 @@ class DetectionService:
             return self._handle_conflict(alarm_event, now)
 
         return self._complete_incident_creation(alarm_event, record, now)
+
+    def _is_simulation(self, alarm_event: AlarmEvent) -> bool:
+        """Detect simulation events based on alarm reason or alarm name."""
+        reason_lower = alarm_event.reason.lower()
+        alarm_name_lower = alarm_event.alarm_name.lower()
+        return "simulation" in reason_lower or "sim-" in alarm_name_lower
+
+    def _handle_simulation(self, alarm_event: AlarmEvent, now: datetime) -> str | None:
+        """Handle simulation events — create ticket but mark as test, skip full pipeline."""
+        incident_key = alarm_event.incident_key
+
+        # Create simplified ticket for simulation
+        summary = f"[SIMULATION] {alarm_event.alarm_description or alarm_event.alarm_name}"
+        description = f"""## Simulation Event Detected
+
+**Service**: {alarm_event.function_name or 'N/A'}
+**Stage**: {alarm_event.stage or 'N/A'}
+**Alarm**: {alarm_event.alarm_name}
+**Trigger**: Simulation test alarm
+**Time**: {now.isoformat()}
+
+This is a **test alarm** triggered for validation purposes.
+
+No production impact expected. No automated remediation will be attempted.
+
+### Simulation Details
+- Reason: {alarm_event.reason}
+- State: {alarm_event.old_state} → {alarm_event.new_state}
+"""
+
+        labels = ["simulation", "test", alarm_event.stage or "dev"]
+
+        try:
+            jira_ticket_id = self._ticketing.create_jira_ticket(
+                summary=summary,
+                description=description,
+                labels=labels
+            )
+            if jira_ticket_id:
+                # Add simulation comment
+                self._reporter.report_simulation_detected(jira_ticket_id)
+            return jira_ticket_id
+        except Exception:
+            return None
 
     def _complete_incident_creation(
         self, alarm_event: AlarmEvent, record: CorrelationRecord, now: datetime
