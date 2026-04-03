@@ -31,16 +31,18 @@ def set_state(alarm_name: str, state: str, reason: str = "Simulation") -> None:
         StateValue=state,
         StateReason=reason,
     )
-    # Push metric data to keep alarm in desired state through evaluation
-    if state == "ALARM":
-        _cw.put_metric_data(
-            Namespace=config.METRIC_NAMESPACE,
-            MetricData=[{
-                "MetricName": config.METRIC_NAME,
-                "Value": 100.0,
-                "Timestamp": datetime.now(timezone.utc),
-            }],
-        )
+    # Push metric data to keep alarm in desired state through re-evaluation.
+    # Without this, SetAlarmState is temporary — CloudWatch overrides it
+    # on the next evaluation cycle (~60s) based on actual metric data.
+    metric_value = 100.0 if state == "ALARM" else 0.0
+    _cw.put_metric_data(
+        Namespace=config.METRIC_NAMESPACE,
+        MetricData=[{
+            "MetricName": config.METRIC_NAME,
+            "Value": metric_value,
+            "Timestamp": datetime.now(timezone.utc),
+        }],
+    )
 
 
 def get_state(alarm_name: str) -> str:
