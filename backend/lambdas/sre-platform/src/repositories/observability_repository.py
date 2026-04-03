@@ -272,7 +272,6 @@ class ObservabilityRepository:
             }
 
         except Exception:
-            logger.exception("Failed to retrieve alarm metric data for %s", alarm_name)
             return {"alarm_config": {}, "datapoints": [], "current_state": "ERROR"}
 
     @observe(operation="get_lambda_metrics", metric_prefix="metrics")
@@ -337,7 +336,6 @@ class ObservabilityRepository:
             }
 
         except Exception:
-            logger.exception("Failed to retrieve Lambda metrics for %s", function_name)
             return {
                 "invocations": 0,
                 "errors": 0,
@@ -432,5 +430,4 @@ class ObservabilityRepository:
             return deployments[:10]
 
         except Exception:
-            logger.exception("Failed to retrieve recent deployments for %s", function_name)
             return []

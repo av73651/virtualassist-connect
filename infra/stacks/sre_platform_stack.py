@@ -280,6 +280,8 @@ class SrePlatformStack(Stack):
     def _create_detection_lambda(self) -> lambda_.Function:
         """Detection Lambda — processes SNS alarm events (Leg 1)."""
         lam_config = self.im_config["detection_lambda"]
+        region = Stack.of(self).region
+        account = Stack.of(self).account
 
         role = self._create_lambda_role("Detection", [
             # DynamoDB: CRUD + GSI query
@@ -300,14 +302,14 @@ class SrePlatformStack(Stack):
             iam.PolicyStatement(
                 actions=["secretsmanager:GetSecretValue"],
                 resources=[
-                    f"arn:aws:secretsmanager:{Stack.of(self).region}:{Stack.of(self).account}:secret:{self.im_config['jira_secret_name']}*"
+                    f"arn:aws:secretsmanager:{region}:{account}:secret:{self.im_config['jira_secret_name']}*"
                 ],
             ),
             # EventBridge: publish incident events
             iam.PolicyStatement(
                 actions=["events:PutEvents"],
                 resources=[
-                    f"arn:aws:events:{Stack.of(self).region}:{Stack.of(self).account}:event-bus/default"
+                    f"arn:aws:events:{region}:{account}:event-bus/default"
                 ],
             ),
             # CloudWatch Logs: log analysis for recovery flow
@@ -320,7 +322,7 @@ class SrePlatformStack(Stack):
                     "logs:StopQuery",
                 ],
                 resources=[
-                    f"arn:aws:logs:{Stack.of(self).region}:{Stack.of(self).account}:log-group:/aws/lambda/*:*"
+                    f"arn:aws:logs:{region}:{account}:log-group:/aws/lambda/*:*"
                 ],
             ),
             # CloudWatch: alarm operations (describe, history)
@@ -330,7 +332,7 @@ class SrePlatformStack(Stack):
                     "cloudwatch:DescribeAlarmHistory",
                 ],
                 resources=[
-                    f"arn:aws:cloudwatch:{Stack.of(self).region}:{Stack.of(self).account}:alarm:*"
+                    f"arn:aws:cloudwatch:{region}:{account}:alarm:*"
                 ],
             ),
             # CloudWatch: metrics collection (GetMetricStatistics requires wildcard resource)
@@ -345,7 +347,7 @@ class SrePlatformStack(Stack):
                     "lambda:ListVersionsByFunction",
                 ],
                 resources=[
-                    f"arn:aws:lambda:{Stack.of(self).region}:{Stack.of(self).account}:function:*"
+                    f"arn:aws:lambda:{region}:{account}:function:*"
                 ],
             ),
         ])
