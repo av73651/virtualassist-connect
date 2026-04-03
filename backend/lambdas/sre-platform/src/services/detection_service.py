@@ -74,10 +74,9 @@ class DetectionService:
         return self._complete_incident_creation(alarm_event, record, now)
 
     def _is_simulation(self, alarm_event: AlarmEvent) -> bool:
-        """Detect simulation events based on alarm reason or alarm name."""
+        """Detect simulation events based on alarm reason containing 'simulation'."""
         reason_lower = alarm_event.reason.lower()
-        alarm_name_lower = alarm_event.alarm_name.lower()
-        return "simulation" in reason_lower or "sim-" in alarm_name_lower
+        return "simulation" in reason_lower
 
     def _handle_simulation(self, alarm_event: AlarmEvent, now: datetime) -> str | None:
         """Handle simulation events — create ticket but mark as test, skip full pipeline."""
@@ -108,7 +107,9 @@ No production impact expected. No automated remediation will be attempted.
             jira_ticket_id = self._ticketing.create_jira_ticket(
                 summary=summary,
                 description=description,
-                labels=labels
+                priority="SEV-4",
+                labels=labels,
+                incident_key=incident_key,
             )
             if jira_ticket_id:
                 # Add simulation comment
