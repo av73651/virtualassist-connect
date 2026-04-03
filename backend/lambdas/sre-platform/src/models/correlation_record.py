@@ -13,8 +13,27 @@ It enables:
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from src.models.enums import CorrelationStatus
+
+
+def _convert_floats_to_decimal(obj):
+    """Recursively convert float values to Decimal for DynamoDB compatibility.
+
+    Args:
+        obj: Python object (dict, list, or primitive)
+
+    Returns:
+        Same structure with floats converted to Decimals
+    """
+    if isinstance(obj, dict):
+        return {k: _convert_floats_to_decimal(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_convert_floats_to_decimal(item) for item in obj]
+    elif isinstance(obj, float):
+        return Decimal(str(obj))
+    return obj
 
 
 @dataclass
@@ -176,7 +195,7 @@ class CorrelationRecord:
         }
 
         if self.metrics:
-            item["metrics"] = self.metrics
+            item["metrics"] = _convert_floats_to_decimal(self.metrics)
             item["metrics_collected_at"] = self.metrics_collected_at.isoformat()
 
         return item
