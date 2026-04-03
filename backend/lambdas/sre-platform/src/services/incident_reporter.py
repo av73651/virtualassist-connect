@@ -42,6 +42,7 @@ class IncidentReporter:
         blast_radius: dict,
         log_analysis: str | None = None,
         references: list[dict] | None = None,
+        metrics: dict | None = None,
     ) -> None:
         # Core classification info — synthesize better root cause if "unknown"
         if root_cause == "unknown" and log_analysis:
@@ -50,6 +51,28 @@ class IncidentReporter:
             parts = [f"Root cause classified as {root_cause} ({confidence}). {synthesized}."]
         else:
             parts = [f"Root cause classified as {root_cause} ({confidence})."]
+
+        # Alarm datapoints evidence (THE KEY DIAGNOSTIC)
+        if metrics:
+            alarm_metrics = metrics.get("alarm_metrics", {})
+            datapoints = alarm_metrics.get("datapoints", [])
+            alarm_config = alarm_metrics.get("alarm_config", {})
+
+            if datapoints:
+                metric_name = alarm_config.get("metric_name", "value").lower()
+                threshold = alarm_config.get("threshold", 0.0)
+                comparison_op = alarm_config.get("comparison_operator", "")
+
+                # Format last 10 datapoints for visibility
+                recent = datapoints[-10:]
+                datapoint_lines = "\n".join(
+                    f"  {dp['timestamp'][11:16]} {metric_name}={int(dp['value'])}"
+                    for dp in recent
+                )
+                parts.append(
+                    f"\nAlarm Evidence (last {len(recent)} datapoints):\n{datapoint_lines}\n"
+                    f"Threshold: {threshold} ({comparison_op})"
+                )
 
         # Blast radius — heuristic assessment
         parts.append(
@@ -184,6 +207,36 @@ class IncidentReporter:
         self, jira_ticket_id: str, filename: str, content: str,
     ) -> None:
         self._ticketing.attach_jira_file(jira_ticket_id, filename, content)
+
+    @observe(operation="report_diagnostics", metric_prefix="reporter")
+    def report_diagnostics(
+        self, jira_ticket_id: str, function_name: str, log_group: str,
+        service: str, stage: str, error_count: int = 0,
+    ) -> None:
+        """Add diagnostics section with function, log group, links, CLI commands."""
+        region = "us-west-2"
+        log_group_encoded = log_group.replace("/", "$252F")
+        cw_logs_url = f"https://console.aws.amazon.com/cloudwatch/home?region={region}#logsV2:log-groups/log-group/{log_group_encoded}"
+        lambda_url = f"https://console.aws.amazon.com/lambda/home?region={region}#/functions/{function_name}"
+
+        diagnostics = f"""Diagnostics
+Function: {function_name}
+Log Group: {log_group}
+Error Count: {error_count}
+
+Useful Links
+CloudWatch Logs  |  Lambda Function
+
+CLI Commands
+```
+# Tail recent logs
+aws logs tail {log_group} --since 15m --follow
+# Check alarm state
+aws cloudwatch describe-alarms --alarm-names "{service}-high-*-{stage}" --query 'MetricAlarms[].{{Name:AlarmName,State:StateValue}}'
+# Check Lambda errors
+aws lambda get-function --function-name {function_name} --query 'Configuration.{{State:State,LastModified:LastModified}}'
+```"""
+        self._ticketing.add_jira_comment(jira_ticket_id, diagnostics)
 
     # ------------------------------------------------------------------ #
     # Resolution

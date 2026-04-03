@@ -35,4 +35,6 @@ CRITICAL CONSTRAINTS:
 - NO CLI commands (separate section exists in Jira)
 - NO preamble, NO markdown headers beyond required format
 - NO explanations of methodology
-- NO speculation without evidence: avoid "may have", "might", "possibly", "likely", "suggests" unless backed by metrics/logs
+- ZERO speculation. BANNED: "suggests", "likely", "may", "might", "possibly", "could be", "appears", "seems"
+- Use ONLY deterministic language with evidence: "indicates", "shows", "demonstrates", "confirms"
+- Example: "Datapoints show 0 errors" NOT "suggests no impact"

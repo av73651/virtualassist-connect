@@ -122,6 +122,7 @@ class TriageService:
             jira_ticket_id, root_cause, confidence, evidence, blast_radius,
             log_analysis=classification_result.get("log_analysis"),
             references=classification_result.get("references", []),
+            metrics=metrics,
         )
 
         # Step 4a: Escalation validation - don't escalate false positives
@@ -134,10 +135,20 @@ class TriageService:
                 monitored = existing.to_status(CorrelationStatus.GRACE)
                 self._correlation.update(monitored)
 
+            # Add diagnostics for monitoring decision
+            self._reporter.report_diagnostics(
+                jira_ticket_id,
+                function_name=effective_fn,
+                log_group=effective_log_group,
+                service=service,
+                stage=stage,
+                error_count=error_count,
+            )
+
             self._reporter.report_resolution_summary(
                 jira_ticket_id,
                 "Incident marked for monitoring. No errors detected and classification confidence is low. "
-                "Likely causes: metric lag, alarm misconfiguration, or transient spike that self-resolved. "
+                "Metric lag, alarm misconfiguration, or transient spike that self-resolved. "
                 "System will continue monitoring. If alarm persists or errors appear, incident will be reopened.",
             )
             return "monitoring"

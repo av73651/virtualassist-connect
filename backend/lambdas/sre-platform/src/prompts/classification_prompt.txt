@@ -52,7 +52,9 @@ Respond with ONLY a JSON object. CRITICAL: log_analysis MUST be ONE sentence max
 
 NOTE: blast_radius and verification are handled in escalation phase, NOT here.
 
-CRITICAL: NO speculation without evidence. Avoid "may have", "might", "possibly", "likely", "suggests" unless directly supported by metrics/datapoints.
+CRITICAL: ZERO speculation. BANNED WORDS: "suggests", "likely", "may", "might", "possibly", "could be", "appears to", "seems".
+REQUIRED: Use deterministic language ONLY with direct metric evidence: "indicates" (with data), "shows", "demonstrates", "confirms".
+Example: "Datapoints show 0 errors" NOT "suggests metric lag".
 
 {{
   "classification": "<one of the valid classifications above>",
