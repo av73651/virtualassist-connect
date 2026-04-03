@@ -43,10 +43,13 @@ class IncidentReporter:
         log_analysis: str | None = None,
         references: list[dict] | None = None,
     ) -> None:
-        # Core classification info
-        parts = [
-            f"Root cause classified as {root_cause} ({confidence}).",
-        ]
+        # Core classification info — synthesize better root cause if "unknown"
+        if root_cause == "unknown" and log_analysis:
+            # Extract first sentence of log_analysis as synthesized root cause
+            synthesized = log_analysis.split(". ")[0] if ". " in log_analysis else log_analysis[:100]
+            parts = [f"Root cause classified as {root_cause} ({confidence}). {synthesized}."]
+        else:
+            parts = [f"Root cause classified as {root_cause} ({confidence})."]
 
         # Blast radius — heuristic assessment
         parts.append(

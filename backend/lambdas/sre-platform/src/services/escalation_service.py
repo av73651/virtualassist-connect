@@ -131,6 +131,18 @@ class EscalationService:
                 if ai_result:
                     ai_analysis = ai_result["text"]
                     ai_references = ai_result.get("references", [])
+
+                    # Synthesize better root cause from AI if original is "unknown"
+                    if root_cause == "unknown" and ai_analysis:
+                        # Extract "Root Cause:" line from AI analysis
+                        for line in ai_analysis.split("\n"):
+                            if line.startswith("**Root Cause**:"):
+                                synthesized = line.replace("**Root Cause**:", "").strip()
+                                # Remove markdown formatting and take first sentence
+                                synthesized = synthesized.replace("**", "").split(". ")[0]
+                                if synthesized and len(synthesized) > 10:
+                                    root_cause = synthesized[:150]  # Limit length
+                                break
             except Exception:
                 logger.warning("AI analysis failed, continuing without AI insights")
 
