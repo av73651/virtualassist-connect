@@ -533,6 +533,19 @@ class SrePlatformStack(Stack):
                 actions=["sns:Publish"],
                 resources=[self.notification_topic.topic_arn],
             ),
+            # Checkpoint table: read-only for delta report (Query GSI + GetItem)
+            iam.PolicyStatement(
+                actions=["dynamodb:Query", "dynamodb:GetItem"],
+                resources=[
+                    self.checkpoint_table.table_arn,
+                    f"{self.checkpoint_table.table_arn}/index/*",
+                ],
+            ),
+            # Checkpoint manifests: read-only for delta report (S3 manifest download)
+            iam.PolicyStatement(
+                actions=["s3:GetObject"],
+                resources=[f"{self.checkpoint_bucket.bucket_arn}/*"],
+            ),
         ]
 
         # Bedrock: Knowledge Base retrieval for AI log analysis
