@@ -51,10 +51,16 @@ def run() -> dict:
     # Step 5: Verify DynamoDB record
     printer.step(5, TOTAL_STEPS, "Verifying DynamoDB record...")
     record = dynamodb.wait_for_record(INCIDENT_KEY, timeout=35)
-    if record and record.get("status") == "DETECTED" and record.get("jira_ticket_id"):
+    if record and record.get("jira_ticket_id"):
         ticket = record["jira_ticket_id"]
-        printer.passed(f"Record found: status=DETECTED, ticket={ticket}")
-        result["ticket_id"] = ticket
+        status = record.get("status")
+        # Detection creates DETECTED; downstream Lambdas may have already processed
+        if status in ["DETECTED", "TRIAGING", "ESCALATED", "GRACE"]:
+            printer.passed(f"Record found: status={status}, ticket={ticket}")
+            result["ticket_id"] = ticket
+        else:
+            printer.failed(f"Unexpected status: {status}", "Expected DETECTED or downstream status")
+            result["status"] = "failed"
     else:
         printer.failed("DynamoDB record not found or missing jira_ticket_id", str(record))
         result["status"] = "failed"
