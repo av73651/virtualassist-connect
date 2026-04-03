@@ -6,7 +6,7 @@ Expected runtime: ~45s (30s cool-off + 15s processing)."""
 from lib import cloudwatch, sns, dynamodb, printer, config
 
 NAME = "Leg 1: Detection"
-ALARM_NAME = f"{config.SIM_PREFIX}-leg-detection-{config.ALARM_TYPE}-{config.STAGE}"
+ALARM_NAME = f"{config.SIM_PREFIX}-leg-detection-high-{config.ALARM_TYPE}-{config.STAGE}"
 INCIDENT_KEY = f"{config.SIM_PREFIX}-leg-detection-{config.ALARM_TYPE}-{config.STAGE}"
 TOTAL_STEPS = 6
 

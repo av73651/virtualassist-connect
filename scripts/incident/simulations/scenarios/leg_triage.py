@@ -70,10 +70,17 @@ def run() -> dict:
     record = dynamodb.get_record(INCIDENT_KEY)
     if record:
         ddb_status = record.get("status", "")
-        if ddb_status in ["GRACE", "ESCALATED"]:
-            printer.passed(f"DDB status transitioned: {ddb_status}")
+        if response_status == "escalated" and ddb_status == "TRIAGING":
+            # Triage Lambda sets TRIAGING; Escalation Lambda (via EventBridge) sets ESCALATED
+            printer.passed(f"DDB status: {ddb_status} (awaiting Escalation Lambda)")
+        elif response_status == "auto-resolved" and ddb_status == "GRACE":
+            # Auto-resolution path: Triage Lambda sets GRACE
+            printer.passed(f"DDB status: {ddb_status} (auto-resolved)")
+        elif ddb_status in ["ESCALATED", "GRACE"]:
+            # Already processed by downstream Lambda (rare in isolated test)
+            printer.passed(f"DDB status: {ddb_status}")
         else:
-            printer.failed(f"DDB status unchanged: {ddb_status}", "Expected GRACE or ESCALATED")
+            printer.failed(f"DDB status: {ddb_status}", f"Expected TRIAGING (escalated) or GRACE (auto-resolved)")
             result["status"] = "failed"
     else:
         printer.failed("DDB record not found after triage", "Expected record")
