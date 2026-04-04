@@ -88,17 +88,17 @@ def add_sre_monitoring(
 
 
 def _create_cloudwatch_metrics_policy():
-    """Create IAM policy statement for publishing CloudWatch metrics."""
+    """Create IAM policy statement for publishing CloudWatch metrics.
+
+    Note: CloudWatch IAM conditions on namespace don't work reliably because
+    the namespace is not available during IAM authorization evaluation.
+    Instead, we grant PutMetricData permission and rely on application code
+    to only emit metrics to CustomMetrics/* namespaces.
+    """
     from aws_cdk import aws_iam as iam
 
     return iam.PolicyStatement(
         actions=["cloudwatch:PutMetricData"],
         resources=["*"],  # CloudWatch metrics are not ARN-addressable
-        conditions={
-            "StringEquals": {
-                "cloudwatch:namespace": [
-                    "CustomMetrics/*"  # Restrict to CustomMetrics namespace
-                ]
-            }
-        }
+        # Note: Removed namespace condition - doesn't work with PutMetricData
     )

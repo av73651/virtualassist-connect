@@ -90,6 +90,14 @@ echo ""
 # Step 1: Validate prerequisites
 print_info "Step 1: Validating prerequisites..."
 
+# CRITICAL: Check for lessons-learnt memory
+MEMORY_FILE="$HOME/.claude/projects/-Users-rameshnagarajan/memory/deployment_local_testing_requirement_2026-04-04.md"
+if [ -f "$MEMORY_FILE" ]; then
+    print_info "✓ Lessons-learnt memory detected - enforcing local testing"
+else
+    print_warning "No lessons-learnt memory found - proceeding with caution"
+fi
+
 # Check AWS CLI
 if ! command -v aws &> /dev/null; then
     print_error "AWS CLI not found. Please install: https://aws.amazon.com/cli/"
@@ -119,13 +127,67 @@ if ! jq -e ".${ENVIRONMENT}" infra/config.json &> /dev/null; then
 fi
 print_success "Environment configuration found in config.json"
 
-# Step 2: Check Lambda packages
-print_info "Step 2: Checking Lambda packages..."
+# Step 2: Run local validation tests (MANDATORY - prevent deployment failures)
+print_info "Step 2: Running local Lambda validation tests..."
 
 LAMBDAS=("hello-world" "calculator" "sre-platform")
 if [ "$LAMBDA_NAME" != "all" ]; then
     LAMBDAS=("$LAMBDA_NAME")
 fi
+
+# Check if Docker is available for local testing
+if ! command -v docker &> /dev/null; then
+    print_error "Docker is required for local Lambda testing"
+    echo "Install Docker: https://docs.docker.com/get-docker/"
+    exit 1
+fi
+
+# Run local import tests for each Lambda
+TESTS_FAILED=false
+for lambda in "${LAMBDAS[@]}"; do
+    TEST_SCRIPT="backend/lambdas/$lambda/package/test-lambda-imports.py"
+
+    if [ ! -f "$TEST_SCRIPT" ]; then
+        print_warning "No test script found for $lambda - creating one..."
+        cp test-lambda-imports.py "backend/lambdas/$lambda/package/" 2>/dev/null || {
+            print_error "Cannot create test script for $lambda"
+            TESTS_FAILED=true
+            continue
+        }
+    fi
+
+    print_info "Testing $lambda in Lambda Docker environment..."
+
+    if docker run --rm --entrypoint python3 \
+        -v "$(pwd)/backend/lambdas/$lambda/package:/var/task" \
+        public.ecr.aws/lambda/python:3.12 \
+        /var/task/test-lambda-imports.py &>/tmp/lambda-test-$lambda.log; then
+        print_success "$lambda: All imports validated ✓"
+    else
+        print_error "$lambda: Import validation FAILED"
+        echo "See log: /tmp/lambda-test-$lambda.log"
+        cat /tmp/lambda-test-$lambda.log
+        TESTS_FAILED=true
+    fi
+done
+
+if [ "$TESTS_FAILED" = true ]; then
+    print_error "Local validation tests FAILED"
+    echo ""
+    echo "❌ DEPLOYMENT BLOCKED - Local tests must pass before deploying"
+    echo ""
+    echo "Fix the issues and run tests again:"
+    echo "  docker run --rm --entrypoint python3 \\"
+    echo "    -v \$(pwd)/backend/lambdas/<lambda>/package:/var/task \\"
+    echo "    public.ecr.aws/lambda/python:3.12 \\"
+    echo "    /var/task/test-lambda-imports.py"
+    exit 1
+fi
+
+print_success "All local validation tests PASSED"
+
+# Step 3: Check Lambda packages
+print_info "Step 3: Checking Lambda packages..."
 
 REBUILD_NEEDED=false
 for lambda in "${LAMBDAS[@]}"; do
@@ -234,7 +296,8 @@ print_info "Running CDK diff..."
 if [ "$LAMBDA_NAME" = "all" ]; then
     cdk diff --all --context env="$ENVIRONMENT" || true
 else
-    STACK_NAME=$(echo "$LAMBDA_NAME" | sed 's/-\([a-z]\)/\U\1/g' | sed 's/^./\U&/')Stack-$ENVIRONMENT
+    # Convert lambda name to PascalCase stack name (e.g., "calculator" -> "CalculatorStack-dev")
+    STACK_NAME="$(echo "$LAMBDA_NAME" | awk '{for(i=1;i<=NF;i++){sub(/./,toupper(substr($i,1,1)),$i)}}1' FS='-' OFS='')Stack-$ENVIRONMENT"
     cdk diff "$STACK_NAME" --context env="$ENVIRONMENT" || true
 fi
 
@@ -256,7 +319,8 @@ if [ "$LAMBDA_NAME" = "all" ]; then
         exit 1
     }
 else
-    STACK_NAME=$(echo "$LAMBDA_NAME" | sed 's/-\([a-z]\)/\U\1/g' | sed 's/^./\U&/')Stack-$ENVIRONMENT
+    # Convert lambda name to PascalCase stack name (e.g., "calculator" -> "CalculatorStack-dev")
+    STACK_NAME="$(echo "$LAMBDA_NAME" | awk '{for(i=1;i<=NF;i++){sub(/./,toupper(substr($i,1,1)),$i)}}1' FS='-' OFS='')Stack-$ENVIRONMENT"
     print_info "Deploying $STACK_NAME..."
     cdk deploy "$STACK_NAME" --context env="$ENVIRONMENT" --require-approval never || {
         print_error "Deployment failed"
@@ -271,7 +335,8 @@ print_info "Step 6: Post-deployment validation..."
 
 # Get API Gateway URL from CloudFormation outputs
 for lambda in "${LAMBDAS[@]}"; do
-    STACK_NAME=$(echo "$lambda" | sed 's/-\([a-z]\)/\U\1/g' | sed 's/^./\U&/')Stack-$ENVIRONMENT
+    # Convert lambda name to PascalCase stack name (e.g., "calculator" -> "CalculatorStack-dev")
+    STACK_NAME="$(echo "$lambda" | awk '{for(i=1;i<=NF;i++){sub(/./,toupper(substr($i,1,1)),$i)}}1' FS='-' OFS='')Stack-$ENVIRONMENT"
 
     print_info "Checking $lambda Lambda function..."
     FUNCTION_NAME="${lambda}-api-${ENVIRONMENT}"

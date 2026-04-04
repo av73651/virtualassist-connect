@@ -141,6 +141,22 @@ Controlled via `infra/config.json`:
 
 ### 4.1 Pre-Deployment Checks
 
+**MANDATORY: Run pre-deployment validation script FIRST**:
+```bash
+# STEP 0: Pre-deployment validation (BLOCKS deployment if failed)
+./scripts/pre-deploy-validation.sh calculator
+
+# This script checks:
+# - Memory for past lessons learned
+# - Package has all dependencies (pydantic, boto3, opentelemetry, shared)
+# - Package size is reasonable (10-250MB)
+# - Local Docker import test passes
+# - Architecture is x86_64
+# - Using HTTP exporter (not gRPC)
+#
+# DEPLOYMENT IS BLOCKED if any check fails
+```
+
 **MUST verify before deploying**:
 ```bash
 # 1. Check code compiles
@@ -424,14 +440,18 @@ Follow `WORKFLOW-GATES.md`:
 ## EXECUTION CHECKLIST
 
 When using this skill:
-1. [ ] Determine deployment target (Jenkins vs CDK direct)
-2. [ ] Verify environment (dev/staging/prod)
-3. [ ] Check pre-deployment validations
-4. [ ] Trigger deployment
-5. [ ] Monitor deployment progress
-6. [ ] Validate post-deployment
-7. [ ] Update documentation if needed
-8. [ ] Notify stakeholders
+1. [ ] **CHECK MEMORY FIRST** - Review ~/.claude/memory/MEMORY.md for lessons learned
+2. [ ] **RUN PRE-DEPLOYMENT VALIDATION** - `./scripts/pre-deploy-validation.sh <lambda-name>` (MANDATORY - must pass)
+3. [ ] Determine deployment target (Jenkins vs CDK direct)
+4. [ ] Verify environment (dev/staging/prod)
+5. [ ] Check pre-deployment validations
+6. [ ] Trigger deployment
+7. [ ] Monitor deployment progress
+8. [ ] Validate post-deployment
+9. [ ] Update documentation if needed
+10. [ ] Notify stakeholders
+
+**CRITICAL**: Steps 1 and 2 are MANDATORY and BLOCKING. Do not proceed without completing them.
 
 ---
 

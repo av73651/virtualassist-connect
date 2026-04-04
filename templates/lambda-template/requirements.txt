@@ -5,7 +5,7 @@ pydantic==2.6.0
 boto3==1.34.0
 
 # OpenTelemetry (tracing and metrics) - Matched to ADOT Layer 1-32-0:2
-# Using HTTP exporter instead of gRPC to avoid binary compatibility issues
+# CRITICAL: Use HTTP exporter (not gRPC) to avoid binary compatibility issues
 opentelemetry-api==1.32.0
 opentelemetry-sdk==1.32.0
 opentelemetry-instrumentation==0.53b0

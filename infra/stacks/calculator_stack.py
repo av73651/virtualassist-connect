@@ -145,7 +145,7 @@ class CalculatorStack(Stack):
                 "OTEL_SERVICE_NAME": "calculator-api",
                 "OTEL_TRACES_SAMPLER": self.config.get("trace_sampling", "always_on"),
                 "OTEL_METRICS_EXPORTER": "otlp",
-                "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+                "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",  # Use HTTP instead of gRPC
                 "OTEL_PROPAGATORS": "tracecontext,baggage,xray",
                 "OTEL_RESOURCE_ATTRIBUTES": "service.name=calculator-api,service.namespace=VirtualAssist"
             },
