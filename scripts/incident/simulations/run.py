@@ -29,6 +29,7 @@ from scenarios import (
     recovery_skip,
     escalation,
     happy_path_e2e,
+    real_observability_e2e,
 )
 
 LEG_TESTS = {
@@ -45,6 +46,7 @@ E2E_TESTS = {
     4: ("Recovery Skip", recovery_skip),
     5: ("Grace Period Escalation", escalation),
     6: ("Happy Path E2E (3-Lambda Pipeline)", happy_path_e2e),
+    7: ("Real Observability E2E (Custom Metrics + Alarm)", real_observability_e2e),
 }
 
 
