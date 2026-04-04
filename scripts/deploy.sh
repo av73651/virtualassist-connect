@@ -138,7 +138,13 @@ for lambda in "${LAMBDAS[@]}"; do
         print_warning "Package directory empty for $lambda"
         REBUILD_NEEDED=true
     else
-        print_success "Package found for $lambda"
+        # Validate package has dependencies (not just src/)
+        if [ ! -d "$PACKAGE_DIR/pydantic" ] && [ ! -d "$PACKAGE_DIR/opentelemetry" ]; then
+            print_warning "Package for $lambda missing dependencies (only has src/shared)"
+            REBUILD_NEEDED=true
+        else
+            print_success "Package found for $lambda (with dependencies)"
+        fi
     fi
 done
 
@@ -147,40 +153,56 @@ if [ "$REBUILD_NEEDED" = true ]; then
     read -p "Rebuild packages now? (y/n) " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        print_info "Rebuilding Lambda packages using Jenkins Docker images..."
-        print_warning "Note: This requires Docker to be running"
+        print_info "Rebuilding Lambda packages with dependencies..."
+
+        # Check if pip3 is available
+        if ! command -v pip3 &> /dev/null; then
+            print_error "pip3 not found. Please install Python 3 and pip."
+            exit 1
+        fi
 
         for lambda in "${LAMBDAS[@]}"; do
             print_info "Building $lambda..."
-
-            # Build Docker image
-            docker build -f "backend/lambdas/$lambda/Dockerfile" -t "lambda-$lambda-ci:latest" . || {
-                print_error "Failed to build Docker image for $lambda"
-                exit 1
-            }
 
             # Create package directory
             rm -rf "backend/lambdas/$lambda/package"
             mkdir -p "backend/lambdas/$lambda/package"
 
-            # Run container to create package
-            docker run --rm -v "$(pwd)/backend/lambdas/$lambda/package:/tmp/package" \
-                "lambda-$lambda-ci:latest" \
-                bash -c "
-                    mkdir -p /tmp/build
-                    cp -r \${LAMBDA_TASK_ROOT}/src /tmp/build/
-                    cp -r /opt/python/shared /tmp/build/
-                    cd /tmp/build
-                    zip -r /tmp/package/deployment.zip . -x '*.pyc' '*/__pycache__/*'
-                    cd /tmp/package
-                    unzip -q deployment.zip
-                    rm deployment.zip
-                " || {
-                print_error "Failed to package $lambda"
+            # Install dependencies for Lambda runtime (Python 3.12, Linux)
+            print_info "  Installing dependencies..."
+            pip3 install -r "backend/lambdas/$lambda/requirements.txt" \
+                -t "backend/lambdas/$lambda/package/" \
+                --platform manylinux2014_x86_64 \
+                --only-binary=:all: \
+                --python-version 3.12 \
+                --implementation cp \
+                --quiet || {
+                print_error "Failed to install dependencies for $lambda"
+                print_info "Tip: If this fails, use Docker instead: docker build -f backend/lambdas/$lambda/Dockerfile ..."
                 exit 1
             }
 
-            print_success "$lambda packaged successfully"
+            # Copy source code
+            print_info "  Copying source code..."
+            cp -r "backend/lambdas/$lambda/src" "backend/lambdas/$lambda/package/"
+
+            # Copy shared layer
+            print_info "  Copying shared layer..."
+            cp -r "backend/lambda-layer/python/shared" "backend/lambdas/$lambda/package/"
+
+            # Copy config files if they exist
+            if [ -f "backend/lambdas/$lambda/incident_config.json" ]; then
+                cp "backend/lambdas/$lambda/incident_config.json" "backend/lambdas/$lambda/package/"
+            fi
+
+            # Validate package
+            if [ -d "backend/lambdas/$lambda/package/pydantic" ] || [ -d "backend/lambdas/$lambda/package/opentelemetry" ]; then
+                PACKAGE_SIZE=$(du -sh "backend/lambdas/$lambda/package" | cut -f1)
+                print_success "$lambda packaged successfully (${PACKAGE_SIZE})"
+            else
+                print_error "$lambda package validation failed - dependencies missing"
+                exit 1
+            fi
         done
     else
         print_error "Deployment cannot proceed without Lambda packages"
@@ -263,8 +285,46 @@ for lambda in "${LAMBDAS[@]}"; do
         RUNTIME=$(aws lambda get-function-configuration --function-name "$FUNCTION_NAME" --query Runtime --output text)
 
         echo "  Memory: ${MEMORY}MB, Timeout: ${TIMEOUT}s, Runtime: $RUNTIME"
+
+        # Verify ADOT layer
+        ADOT_LAYER=$(aws lambda get-function-configuration --function-name "$FUNCTION_NAME" \
+            --query 'Layers[?contains(Arn, `aws-otel-python`)].Arn' --output text 2>/dev/null)
+
+        if [[ "$ADOT_LAYER" == *"1-32-0"* ]]; then
+            print_success "  ADOT Layer: 1-32-0:2 ✓"
+        elif [ -n "$ADOT_LAYER" ]; then
+            print_warning "  ADOT Layer: $ADOT_LAYER (expected 1-32-0:2)"
+        fi
+
+        # Test invocation (optional)
+        if [ "$lambda" = "calculator" ]; then
+            print_info "  Testing Lambda invocation..."
+            TEST_RESULT=$(aws lambda invoke \
+                --function-name "$FUNCTION_NAME" \
+                --payload '{"httpMethod":"POST","path":"/calculator/add","body":"{\"a\":5,\"b\":3}"}' \
+                --cli-binary-format raw-in-base64-out \
+                /tmp/test-response.json 2>&1)
+
+            if grep -q '"statusCode": 200' /tmp/test-response.json 2>/dev/null; then
+                RESULT=$(cat /tmp/test-response.json | jq -r '.body' | jq -r '.result' 2>/dev/null)
+                if [ "$RESULT" = "8.0" ]; then
+                    print_success "  Lambda test: 5 + 3 = 8 ✓"
+                else
+                    print_warning "  Lambda test returned unexpected result"
+                fi
+            else
+                print_warning "  Lambda test invocation returned non-200 status"
+            fi
+            rm -f /tmp/test-response.json
+        fi
     else
-        print_warning "$lambda Lambda function not found (might be event-driven)"
+        # Check event-driven Lambdas
+        FUNCTION_NAME_ALT="incident-${lambda//-/-}-${ENVIRONMENT}"
+        if aws lambda get-function --function-name "$FUNCTION_NAME_ALT" &> /dev/null 2>&1; then
+            print_success "$lambda Lambda function exists ($FUNCTION_NAME_ALT)"
+        else
+            print_warning "$lambda Lambda function not found"
+        fi
     fi
 done
 

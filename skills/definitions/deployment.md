@@ -241,23 +241,87 @@ aws cloudformation cancel-update-stack \
 
 ### 7.1 Common Deployment Failures
 
+**Issue**: `ImportError: No module named 'pydantic'` (or opentelemetry) at runtime
+- **Cause**: Lambda package missing pip dependencies - only has src/ and shared/
+- **Root Cause**: Copied only source code without installing requirements.txt
+- **Fix**: 
+  ```bash
+  # Rebuild package WITH dependencies
+  pip3 install -r requirements.txt \
+    -t package/ \
+    --platform manylinux2014_x86_64 \
+    --only-binary=:all: \
+    --python-version 3.12 \
+    --implementation cp
+  cp -r src package/
+  cp -r shared package/
+  ```
+- **Validation**: Check package has dependencies: `ls package/ | grep pydantic`
+- **Prevention**: Use updated `scripts/deploy.sh` which validates package contents
+
 **Issue**: `Resource handler returned message: "Invalid request provided"`
 - **Cause**: Lambda layer incompatibility
 - **Fix**: Verify ADOT layer ARN matches Python runtime version
 
 **Issue**: `BUILD FAILED: pydantic-core compilation error`
-- **Cause**: Local Python version incompatible (e.g., Python 3.14)
-- **Fix**: Use Jenkins Docker build (Python 3.12) or use virtual environment with Python 3.12
+- **Cause**: Local Python version incompatible (e.g., Python 3.14 vs Lambda's 3.12)
+- **Fix**: Use `--platform manylinux2014_x86_64 --python-version 3.12` flags with pip
 
 **Issue**: `OpenTelemetry import errors at runtime`
 - **Cause**: Version mismatch between ADOT layer and requirements.txt
-- **Fix**: Ensure OpenTelemetry packages match ADOT layer version (see requirements.txt)
+- **Fix**: Ensure OpenTelemetry packages match ADOT layer version
+  - ADOT Layer 1-32-0:2 → OpenTelemetry 1.32.0
+  - ADOT Layer 1-20-0:1 → OpenTelemetry 1.20.0
 
 **Issue**: `CDK deploy fails with 'Stack does not exist'`
 - **Cause**: First-time deployment or wrong environment context
 - **Fix**: Verify `--context env=<env>` and check config.json
 
-### 7.2 Debug Commands
+**Issue**: Lambda deploys but fails immediately
+- **Cause**: Missing dependencies in package
+- **Debug**: Check CloudWatch logs: `aws logs tail /aws/lambda/<function-name> --follow`
+- **Fix**: Rebuild package with ALL dependencies (see first issue above)
+
+### 7.2 Lambda Package Validation (CRITICAL)
+
+**Before deploying, ALWAYS validate Lambda packages:**
+
+```bash
+# 1. Check package directory exists and has content
+ls -la backend/lambdas/calculator/package/
+
+# 2. Verify dependencies are installed (not just src/)
+ls backend/lambdas/calculator/package/ | grep -E "pydantic|opentelemetry"
+
+# 3. Check package size (should be >10MB with dependencies)
+du -sh backend/lambdas/calculator/package/
+# Expected: 15-50MB depending on dependencies
+# If <5MB: likely missing dependencies
+
+# 4. Verify imports work (using Docker)
+docker run --rm --entrypoint python \
+  -v $(pwd)/backend/lambdas/calculator/package:/package \
+  public.ecr.aws/lambda/python:3.12 \
+  -c "
+import sys
+sys.path.insert(0, '/package')
+import pydantic
+import opentelemetry
+print('✓ All imports successful')
+"
+
+# 5. Check Python version compatibility
+docker run --rm --entrypoint python \
+  -v $(pwd)/backend/lambdas/calculator/package:/package \
+  public.ecr.aws/lambda/python:3.12 \
+  --version
+```
+
+**If any validation fails, DO NOT deploy. Fix the package first.**
+
+---
+
+### 7.3 Debug Commands
 
 ```bash
 # Check CDK bootstrap
@@ -371,5 +435,62 @@ When using this skill:
 
 ---
 
+## 11. LESSONS LEARNED (2026-04-04)
+
+### Incident: Missing Dependencies in Lambda Packages
+
+**What Happened:**
+- Deployed Lambda functions with only `src/` and `shared/` directories
+- Missing pip dependencies (pydantic, opentelemetry, etc.)
+- Deployment succeeded but Lambda failed at runtime with ImportError
+
+**Root Cause:**
+- Assumed Docker images copying would include dependencies
+- Only copied source directories, not the installed pip packages
+- Did not validate package contents before deployment
+
+**Time Lost:** ~30 minutes
+
+**Fix Applied:**
+1. Rebuilt packages with pip dependencies using platform-specific wheels
+2. Added package validation to `scripts/deploy.sh`
+3. Added post-deployment testing (Lambda invocation)
+4. Created memory file to prevent recurrence
+
+**Prevention:**
+- ✅ Always install requirements.txt with `--platform manylinux2014_x86_64`
+- ✅ Validate package has dependencies before deploying
+- ✅ Test Lambda invocation after deployment
+- ✅ Check package size (should be >10MB)
+- ✅ Use updated `scripts/deploy.sh` which handles this correctly
+
+**Key Insight:** 
+> "Deployment success ≠ Runtime success"
+> Always validate packages and test after deployment.
+
+---
+
+## 12. CONTINUOUS IMPROVEMENT
+
+### Memory System
+
+This project uses Claude Code's memory system to learn from mistakes:
+- **Location**: `~/.claude/projects/-Users-rameshnagarajan/memory/`
+- **Purpose**: Document lessons learned to avoid repeating mistakes
+- **Files**:
+  - `deployment_lambda_packaging_lesson.md` - Lambda packaging mistakes
+  - `MEMORY.md` - Index of all memories
+
+### How to Use Memory
+
+When encountering deployment issues:
+1. Check `~/.claude/memory/` for similar past issues
+2. Review troubleshooting section in this skill
+3. Validate package structure before deploying
+4. Test after deployment, don't assume success
+
+---
+
 **For detailed Jenkins pipeline configuration, see `Jenkinsfile` in project root.**
 **For CDK stack details, see `infra/stacks/` directory.**
+**For Lambda packaging lessons, see `~/.claude/memory/deployment_lambda_packaging_lesson.md`**
