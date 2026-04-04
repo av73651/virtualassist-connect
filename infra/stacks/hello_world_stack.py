@@ -98,7 +98,7 @@ class HelloWorldStack(Stack):
         # Shared code Lambda Layer (middleware, config)
         shared_layer = lambda_.LayerVersion(
             self, "SharedCodeLayer",
-            code=lambda_.Code.from_asset("../backend/lambda-layer"),
+            code=lambda_.Code.from_asset("backend/lambda-layer"),
             compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
             description="Shared middleware and config for all Lambdas"
         )
@@ -120,7 +120,7 @@ class HelloWorldStack(Stack):
             self, "HelloWorldFunction",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="src.handlers.hello_handler.lambda_handler",
-            code=lambda_.Code.from_asset("../backend/lambdas/hello-world/package"),
+            code=lambda_.Code.from_asset("backend/lambdas/hello-world/package"),
             function_name=f"hello-world-api-{stage}",
             description="Hello World API Lambda function",
             memory_size=self.config["lambda"]["memory_size"],
@@ -141,7 +141,7 @@ class HelloWorldStack(Stack):
                 "OTEL_SERVICE_NAME": "hello-world-api",
                 "OTEL_TRACES_SAMPLER": self.config.get("trace_sampling", "always_on"),
                 "OTEL_METRICS_EXPORTER": "otlp",
-                "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+                "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",  # Use HTTP instead of gRPC
                 "OTEL_PROPAGATORS": "tracecontext,baggage,xray",
                 "OTEL_RESOURCE_ATTRIBUTES": "service.name=hello-world-api,service.namespace=VirtualAssist"
             },

@@ -102,7 +102,7 @@ class CalculatorStack(Stack):
         # Shared code Lambda Layer (middleware, config)
         shared_layer = lambda_.LayerVersion(
             self, "SharedCodeLayer",
-            code=lambda_.Code.from_asset("../backend/lambda-layer"),
+            code=lambda_.Code.from_asset("backend/lambda-layer"),
             compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
             description="Shared middleware and config for all Lambdas"
         )
@@ -124,7 +124,7 @@ class CalculatorStack(Stack):
             self, "CalculatorFunction",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="src.handlers.calculator_handler.lambda_handler",
-            code=lambda_.Code.from_asset("../backend/lambdas/calculator/package"),
+            code=lambda_.Code.from_asset("backend/lambdas/calculator/package"),
             function_name=f"calculator-api-{stage}",
             description="Calculator API Lambda function with mathematical operations",
             memory_size=self.config["lambda"]["memory_size"],
