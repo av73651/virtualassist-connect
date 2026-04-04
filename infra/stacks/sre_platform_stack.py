@@ -267,7 +267,7 @@ class SrePlatformStack(Stack):
         """ADOT Lambda layer for OpenTelemetry auto-instrumentation."""
         adot_layer_arn = self.config.get(
             "adot_layer_arn",
-            f"arn:aws:lambda:{Stack.of(self).region}:901920570463:layer:aws-otel-python-amd64-ver-1-20-0:1",
+            f"arn:aws:lambda:{Stack.of(self).region}:901920570463:layer:aws-otel-python-amd64-ver-1-32-0:2",
         )
         return lambda_.LayerVersion.from_layer_version_arn(
             self, "ADOTLayer", adot_layer_arn

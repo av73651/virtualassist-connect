@@ -110,7 +110,7 @@ class CalculatorStack(Stack):
         # ADOT Lambda Layer ARN (Python)
         adot_layer_arn = self.config.get(
             "adot_layer_arn",
-            f"arn:aws:lambda:{Stack.of(self).region}:901920570463:layer:aws-otel-python-amd64-ver-1-20-0:1"
+            f"arn:aws:lambda:{Stack.of(self).region}:901920570463:layer:aws-otel-python-amd64-ver-1-32-0:2"
         )
 
         stage = self.config["api_gateway"]["stage_name"]
