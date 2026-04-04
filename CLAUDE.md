@@ -113,6 +113,60 @@ virtualassist-connect/
 └── WORKFLOW-GATES.md                  # CRITICAL: Approval gate protocol
 ```
 
+## Deployment
+
+### Jenkins Pipeline Trigger
+
+**Trigger Jenkins build from command line:**
+```bash
+# Trigger build for current branch
+./scripts/jenkins-trigger.sh
+
+# Trigger build for specific branch
+./scripts/jenkins-trigger.sh feature/calculator-enhancements
+```
+
+**Setup Jenkins credentials** (one-time):
+```bash
+# Create credentials file
+cat > ~/.jenkins-credentials << EOF
+JENKINS_URL=http://your-jenkins-url:8080
+JENKINS_USER=your-username
+JENKINS_TOKEN=your-api-token
+EOF
+```
+
+### CDK Deployment Script
+
+**Deploy using automated script:**
+```bash
+# Deploy all stacks to dev
+./scripts/deploy.sh dev
+
+# Deploy specific Lambda to dev
+./scripts/deploy.sh dev calculator
+
+# Deploy to production (requires confirmation)
+./scripts/deploy.sh prod
+```
+
+**Script features:**
+- ✅ Validates prerequisites (AWS CLI, CDK, credentials)
+- ✅ Checks/rebuilds Lambda packages if needed
+- ✅ Shows CDK diff before deployment
+- ✅ Requires explicit confirmation for prod
+- ✅ Post-deployment validation
+- ✅ Deployment summary with next steps
+
+### Manual CDK Deployment
+
+```bash
+cd infra
+cdk deploy --all --context env=dev       # Deploy all to dev
+cdk deploy CalculatorStack-dev --context env=dev  # Deploy specific stack
+cdk diff --all --context env=dev         # Preview changes
+```
+
 ## Common Development Tasks
 
 ### Running Tests
@@ -222,6 +276,7 @@ This project defines AI skills in `skills/`:
 - `/code-review`: Review code for architecture/security/observability compliance
 - `/test-generation`: Generate comprehensive test suites
 - `/documentation-generation`: Generate code-derived documentation
+- `/deployment`: Manage deployments via Jenkins or CDK (see `skills/definitions/deployment.md`)
 
 **Key Patterns**:
 - `layer-architecture.md`: Mandatory clean architecture structure
