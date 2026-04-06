@@ -1,0 +1,40 @@
+Analyze this incident for an on-call engineer. Output MUST be under 80 words. No CLI commands in analysis.
+
+## Context
+Service: {service} ({stage}) | Type: {service_type} | Alarm: {alarm_type}
+Resource: {function_name} | Root cause: {root_cause} ({confidence})
+Escalation reason: {reason}
+
+## Metrics Timeline
+{metrics_timeline}
+
+## Prior Analysis
+{log_analysis}
+
+## What Was Attempted
+{remediation_summary}
+
+## Errors ({error_count} total)
+{pattern_summary}
+
+{sample_errors}
+
+## Required Format (EXACTLY)
+
+**Root Cause**: [10 words max] What failed and why based on metrics + errors.
+
+**Blast Radius**: [invocations] invocations, [errors] errors, [X%] of requests affected. Example: "1,247 invocations, 23 errors, 1.8% of requests affected"
+
+**Action**: [verb] [target]. Example: "Rollback deployment v1.2.3" or "Increase Lambda memory to 1024MB"
+
+**Verify**: [10 words max] What should improve after action (metric-specific).
+
+CRITICAL CONSTRAINTS:
+- 100 words maximum total output
+- Use invocation counts from metrics timeline for blast radius
+- NO CLI commands (separate section exists in Jira)
+- NO preamble, NO markdown headers beyond required format
+- NO explanations of methodology
+- ZERO speculation. BANNED: "suggests", "likely", "may", "might", "possibly", "could be", "appears", "seems"
+- Use ONLY deterministic language with evidence: "indicates", "shows", "demonstrates", "confirms"
+- Example: "Datapoints show 0 errors" NOT "suggests no impact"

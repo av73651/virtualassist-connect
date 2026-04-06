@@ -2,7 +2,7 @@
     "dev": {
         "account": "320644769527",
         "region": "us-west-2",
-        "adot_layer_arn": "arn:aws:lambda:us-west-2:901920570463:layer:aws-otel-python-amd64-ver-1-20-0:1",
+        "adot_layer_arn": "arn:aws:lambda:us-west-2:901920570463:layer:aws-otel-python-amd64-ver-1-32-0:2",
         "lambda": {
             "memory_size": 512,
             "timeout_seconds": 30,
@@ -15,12 +15,33 @@
         },
         "cors_allowed_origins": ["http://localhost:4200"],
         "log_retention_days": 7,
-        "trace_sampling": "always_on"
+        "trace_sampling": "always_on",
+        "sre_platform": {
+            "detection_lambda": {
+                "memory_size": 512,
+                "timeout_seconds": 180
+            },
+            "triage_lambda": {
+                "memory_size": 512,
+                "timeout_seconds": 300
+            },
+            "escalation_lambda": {
+                "memory_size": 256,
+                "timeout_seconds": 30
+            },
+            "sns_alarm_topic_name": "incident-alarm-ingestion",
+            "sns_notification_topic_name": "incident-engineer-notifications",
+            "jira_secret_name": "sre-platform/jira-credentials",
+            "jira_url": "https://rameshnag2002.atlassian.net",
+            "jira_project_key": "ASD",
+            "bedrock_knowledge_base_id": "JNVJET9MJ5",
+            "bedrock_model_arn": "arn:aws:bedrock:us-west-2:320644769527:inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0"
+        }
     },
     "prod": {
         "account": "320644769527",
         "region": "us-west-2",
-        "adot_layer_arn": "arn:aws:lambda:us-west-2:901920570463:layer:aws-otel-python-amd64-ver-1-20-0:1",
+        "adot_layer_arn": "arn:aws:lambda:us-west-2:901920570463:layer:aws-otel-python-amd64-ver-1-32-0:2",
         "lambda": {
             "memory_size": 1024,
             "timeout_seconds": 60,
@@ -33,6 +54,27 @@
         },
         "cors_allowed_origins": ["https://app.virtualassist.example.com"],
         "log_retention_days": 30,
-        "trace_sampling": "parentbased_traceidratio"
+        "trace_sampling": "parentbased_traceidratio",
+        "sre_platform": {
+            "detection_lambda": {
+                "memory_size": 1024,
+                "timeout_seconds": 180
+            },
+            "triage_lambda": {
+                "memory_size": 1024,
+                "timeout_seconds": 300
+            },
+            "escalation_lambda": {
+                "memory_size": 512,
+                "timeout_seconds": 30
+            },
+            "sns_alarm_topic_name": "incident-alarm-ingestion",
+            "sns_notification_topic_name": "incident-engineer-notifications",
+            "jira_secret_name": "sre-platform/jira-credentials",
+            "jira_url": "https://rameshnag2002.atlassian.net",
+            "jira_project_key": "ASD",
+            "bedrock_knowledge_base_id": "",
+            "bedrock_model_arn": ""
+        }
     }
 }

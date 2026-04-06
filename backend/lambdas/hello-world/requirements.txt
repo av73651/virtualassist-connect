@@ -1,12 +1,15 @@
 # Pydantic for DTOs and validation
 pydantic==2.6.0
 
-# OpenTelemetry (tracing and metrics)
-opentelemetry-api==1.23.0
-opentelemetry-sdk==1.23.0
-opentelemetry-instrumentation==0.44b0
-opentelemetry-exporter-otlp==1.23.0
-opentelemetry-sdk-extension-aws==2.0.1
+# AWS SDK (required for custom CloudWatch metrics in @observe decorator)
+boto3==1.34.0
+
+# OpenTelemetry (tracing and metrics) - Matched to ADOT Layer 1-32-0:2
+opentelemetry-api==1.32.0
+opentelemetry-sdk==1.32.0
+opentelemetry-instrumentation==0.53b0
+opentelemetry-exporter-otlp==1.32.0
+opentelemetry-sdk-extension-aws==2.1.0
 
 # Testing
 pytest==7.4.3

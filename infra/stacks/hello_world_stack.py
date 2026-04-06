@@ -98,7 +98,7 @@ class HelloWorldStack(Stack):
         # Shared code Lambda Layer (middleware, config)
         shared_layer = lambda_.LayerVersion(
             self, "SharedCodeLayer",
-            code=lambda_.Code.from_asset("../backend/lambda-layer"),
+            code=lambda_.Code.from_asset("backend/lambda-layer"),
             compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
             description="Shared middleware and config for all Lambdas"
         )
@@ -106,7 +106,7 @@ class HelloWorldStack(Stack):
         # ADOT Lambda Layer ARN (Python)
         adot_layer_arn = self.config.get(
             "adot_layer_arn",
-            f"arn:aws:lambda:{Stack.of(self).region}:901920570463:layer:aws-otel-python-amd64-ver-1-20-0:1"
+            f"arn:aws:lambda:{Stack.of(self).region}:901920570463:layer:aws-otel-python-amd64-ver-1-32-0:2"
         )
 
         stage = self.config["api_gateway"]["stage_name"]
@@ -120,7 +120,7 @@ class HelloWorldStack(Stack):
             self, "HelloWorldFunction",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="src.handlers.hello_handler.lambda_handler",
-            code=lambda_.Code.from_asset("../backend/lambdas/hello-world/package"),
+            code=lambda_.Code.from_asset("backend/lambdas/hello-world/package"),
             function_name=f"hello-world-api-{stage}",
             description="Hello World API Lambda function",
             memory_size=self.config["lambda"]["memory_size"],
@@ -141,7 +141,7 @@ class HelloWorldStack(Stack):
                 "OTEL_SERVICE_NAME": "hello-world-api",
                 "OTEL_TRACES_SAMPLER": self.config.get("trace_sampling", "always_on"),
                 "OTEL_METRICS_EXPORTER": "otlp",
-                "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+                "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",  # Use HTTP instead of gRPC
                 "OTEL_PROPAGATORS": "tracecontext,baggage,xray",
                 "OTEL_RESOURCE_ATTRIBUTES": "service.name=hello-world-api,service.namespace=VirtualAssist"
             },
@@ -270,7 +270,7 @@ class HelloWorldStack(Stack):
         """Create CloudWatch dashboard for observability."""
         dashboard = cloudwatch.Dashboard(
             self, "HelloWorldDashboard",
-            dashboard_name="hello-world-api-dashboard"
+            dashboard_name=f"hello-world-api-dashboard-{self.config['api_gateway']['stage_name']}"
         )
 
         # Lambda metrics
@@ -420,7 +420,7 @@ class HelloWorldStack(Stack):
         # High error rate alarm
         cloudwatch.Alarm(
             self, "HighErrorRateAlarm",
-            alarm_name="hello-world-high-error-rate",
+            alarm_name=f"hello-world-high-error-rate-{self.config['api_gateway']['stage_name']}",
             metric=self.hello_lambda.metric_errors(statistic="Sum"),
             threshold=10,
             evaluation_periods=2,
@@ -431,7 +431,7 @@ class HelloWorldStack(Stack):
         # High latency alarm
         cloudwatch.Alarm(
             self, "HighLatencyAlarm",
-            alarm_name="hello-world-high-latency",
+            alarm_name=f"hello-world-high-latency-{self.config['api_gateway']['stage_name']}",
             metric=self.hello_lambda.metric_duration(statistic="p99"),
             threshold=500,  # 500ms
             evaluation_periods=2,

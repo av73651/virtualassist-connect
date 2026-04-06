@@ -1,0 +1,185 @@
+{
+  "jira": {
+    "issue_type": "[System] Incident",
+    "service_desk_id": "2",
+    "request_type_id": "16",
+    "transition_resolve": "Resolve",
+    "transition_investigate": "Investigate",
+    "labels_prefix": ["incident", "automated"],
+    "priority_map": {
+      "SEV-1": "Highest",
+      "SEV-2": "High",
+      "SEV-3": "Medium"
+    },
+    "http_timeout_seconds": 30
+  },
+  "eventbridge_source": "sre-platform",
+  "lambda_alias_name": "live",
+  "lambda_memory_tiers": [128, 256, 512, 1024, 1536, 2048, 3008, 4096, 5120, 6144, 7168, 8192, 9216, 10240],
+  "recovery_log_minutes": 5,
+  "triage_tuning": {
+    "verification_window_minutes": 2,
+    "verification_error_threshold": 5,
+    "max_sample_payloads": 5,
+    "sample_payload_max_length": 500,
+    "pattern_key_max_length": 100
+  },
+  "severity_mapping": {
+    "error-rate": {
+      "severity": "SEV-1",
+      "recovery_model": "stateless"
+    },
+    "latency": {
+      "severity": "SEV-2",
+      "recovery_model": "stateless"
+    },
+    "4xx-errors": {
+      "severity": "SEV-3",
+      "recovery_model": "stateless"
+    },
+    "queue-backlog": {
+      "severity": "SEV-2",
+      "recovery_model": "replay"
+    },
+    "batch-failure": {
+      "severity": "SEV-1",
+      "recovery_model": "reprocess"
+    },
+    "data-integrity": {
+      "severity": "SEV-1",
+      "recovery_model": "data-correction"
+    },
+    "throttle": {
+      "severity": "SEV-2",
+      "recovery_model": "backlog-drain"
+    },
+    "concurrency": {
+      "severity": "SEV-1",
+      "recovery_model": "backlog-drain"
+    },
+    "dynamo-throttle": {
+      "severity": "SEV-2",
+      "recovery_model": "replay"
+    },
+    "traffic": {
+      "severity": "SEV-1",
+      "recovery_model": "stateless"
+    },
+    "cold-start-rate": {
+      "severity": "SEV-2",
+      "recovery_model": "stateless"
+    }
+  },
+  "cool_off_seconds": {
+    "SEV-1": 30,
+    "SEV-2": 60,
+    "SEV-3": 120
+  },
+  "verification_wait_seconds": {
+    "SEV-1": 60,
+    "SEV-2": 90,
+    "SEV-3": 120
+  },
+  "grace_period_seconds": 900,
+  "reservation_timeout_seconds": 180,
+  "triage_timeout_seconds": 120,
+  "log_analysis": {
+    "window_minutes": 15,
+    "max_events": 500
+  },
+  "correlation_ttl_hours": 24,
+  "storm_detection": {
+    "threshold": 5,
+    "window_seconds": 120
+  },
+  "remediation_catalog": {
+    "lambda": {
+      "bad-deployment": {"action": "lambda-version-rollback"},
+      "performance-degradation": {"action": "lambda-memory-increase"},
+      "rate-limit": {"action": "increase-concurrency"},
+      "concurrency-exhaustion": {"action": "increase-concurrency"}
+    },
+    "api-gateway": {
+      "bad-deployment": {"action": "apigw-deployment-rollback"},
+      "rate-limit": {"action": "apigw-throttle-increase"}
+    },
+    "elasticsearch": {
+      "performance-degradation": {"action": "opensearch-scale-up"},
+      "storage-exhaustion": {"action": "opensearch-storage-increase"}
+    }
+  },
+  "recovery_catalog": {
+    "stateless": {
+      "type": "none",
+      "description": "No data recovery needed — service is stateless, traffic auto-recovers"
+    },
+    "replay": {
+      "type": "step_function",
+      "workflow_arn_env": "REPLAY_DLQ_WORKFLOW_ARN",
+      "description": "Replay unprocessed messages from DLQ"
+    },
+    "reprocess": {
+      "type": "step_function",
+      "workflow_arn_env": "REPROCESS_BATCH_WORKFLOW_ARN",
+      "checkpoint_aware": true,
+      "description": "Rerun failed batch job or ETL pipeline — checkpoint-aware delta report when available"
+    },
+    "data-correction": {
+      "type": "step_function",
+      "workflow_arn_env": "RECONCILIATION_WORKFLOW_ARN",
+      "description": "Trigger data reconciliation workflow"
+    },
+    "backlog-drain": {
+      "type": "lambda",
+      "function_name_env": "BACKLOG_DRAIN_FUNCTION_NAME",
+      "description": "Scale consumers to drain accumulated backlog"
+    }
+  },
+  "service_registry": {
+    "sim": {
+      "description": "Batch data processing pipeline (CSV import, ETL jobs)",
+      "service_type": "lambda",
+      "trigger_type": "schedule",
+      "processing_model": "batch",
+      "data_sources": ["s3", "dynamodb"],
+      "downstream": ["external-api"],
+      "critical_modules": ["batch_processor.core"],
+      "known_failure_modes": [
+        "ImportError from bad deployment (missing or renamed modules)",
+        "Downstream API timeouts during batch processing",
+        "Checkpoint failures on partial batch completion"
+      ]
+    },
+    "calculator": {
+      "description": "REST API calculator service (arithmetic operations)",
+      "service_type": "lambda",
+      "trigger_type": "api-gateway",
+      "processing_model": "request-response",
+      "data_sources": [],
+      "downstream": [],
+      "critical_modules": [],
+      "known_failure_modes": [
+        "Input validation errors",
+        "Division by zero"
+      ]
+    }
+  },
+  "bedrock": {
+    "knowledge_base_id": "JNVJET9MJ5",
+    "model_arn": "arn:aws:bedrock:us-west-2:320644769527:inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0"
+  },
+  "classification_rules": [
+    {"pattern": "import_or_syntax_error", "classification": "bad-deployment", "confidence": "high"},
+    {"pattern": "timeout_errors", "classification": "downstream-timeout", "confidence": "high"},
+    {"pattern": "single_error_dominant", "classification": "specific-bug", "confidence": "high"},
+    {"pattern": "throttling_errors", "classification": "rate-limit", "confidence": "high"},
+    {"pattern": "auth_errors", "classification": "auth-issue", "confidence": "high"},
+    {"pattern": "high_latency_no_errors", "classification": "performance-degradation", "confidence": "medium"},
+    {"pattern": "mixed_errors_recent_deploy", "classification": "bad-deployment", "confidence": "medium"},
+    {"pattern": "spike_then_stable", "classification": "transient-spike", "confidence": "medium"},
+    {"pattern": "throttling_with_concurrency", "classification": "concurrency-exhaustion", "confidence": "high"},
+    {"pattern": "dynamo_throttle_pattern", "classification": "dynamo-capacity-exceeded", "confidence": "high"},
+    {"pattern": "traffic_drop", "classification": "upstream-outage", "confidence": "medium"},
+    {"pattern": "cold_start_spike", "classification": "cold-start-storm", "confidence": "medium"}
+  ]
+}

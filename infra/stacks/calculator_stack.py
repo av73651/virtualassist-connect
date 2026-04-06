@@ -5,11 +5,14 @@ This module defines the AWS infrastructure for the Calculator API using AWS CDK.
 
 from aws_cdk import (
     Stack,
+    Fn,
     aws_lambda as lambda_,
     aws_apigateway as apigw,
     aws_logs as logs,
     aws_iam as iam,
     aws_cloudwatch as cloudwatch,
+    aws_cloudwatch_actions as cw_actions,
+    aws_sns as sns,
     aws_cognito as cognito,
     aws_wafv2 as wafv2,
     Duration,
@@ -17,6 +20,7 @@ from aws_cdk import (
     RemovalPolicy
 )
 from constructs import Construct
+from sre_constructs.sre_monitoring import add_sre_monitoring
 
 
 # Map config log_retention_days to CDK enum
@@ -98,7 +102,7 @@ class CalculatorStack(Stack):
         # Shared code Lambda Layer (middleware, config)
         shared_layer = lambda_.LayerVersion(
             self, "SharedCodeLayer",
-            code=lambda_.Code.from_asset("../backend/lambda-layer"),
+            code=lambda_.Code.from_asset("backend/lambda-layer"),
             compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
             description="Shared middleware and config for all Lambdas"
         )
@@ -106,7 +110,7 @@ class CalculatorStack(Stack):
         # ADOT Lambda Layer ARN (Python)
         adot_layer_arn = self.config.get(
             "adot_layer_arn",
-            f"arn:aws:lambda:{Stack.of(self).region}:901920570463:layer:aws-otel-python-amd64-ver-1-20-0:1"
+            f"arn:aws:lambda:{Stack.of(self).region}:901920570463:layer:aws-otel-python-amd64-ver-1-32-0:2"
         )
 
         stage = self.config["api_gateway"]["stage_name"]
@@ -120,7 +124,7 @@ class CalculatorStack(Stack):
             self, "CalculatorFunction",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="src.handlers.calculator_handler.lambda_handler",
-            code=lambda_.Code.from_asset("../backend/lambdas/calculator/package"),
+            code=lambda_.Code.from_asset("backend/lambdas/calculator/package"),
             function_name=f"calculator-api-{stage}",
             description="Calculator API Lambda function with mathematical operations",
             memory_size=self.config["lambda"]["memory_size"],
@@ -141,7 +145,7 @@ class CalculatorStack(Stack):
                 "OTEL_SERVICE_NAME": "calculator-api",
                 "OTEL_TRACES_SAMPLER": self.config.get("trace_sampling", "always_on"),
                 "OTEL_METRICS_EXPORTER": "otlp",
-                "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+                "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",  # Use HTTP instead of gRPC
                 "OTEL_PROPAGATORS": "tracecontext,baggage,xray",
                 "OTEL_RESOURCE_ATTRIBUTES": "service.name=calculator-api,service.namespace=VirtualAssist"
             },
@@ -288,7 +292,7 @@ class CalculatorStack(Stack):
         """Create CloudWatch dashboard for observability."""
         dashboard = cloudwatch.Dashboard(
             self, "CalculatorDashboard",
-            dashboard_name="calculator-api-dashboard"
+            dashboard_name=f"calculator-api-dashboard-{self.config['api_gateway']['stage_name']}"
         )
 
         # Lambda metrics
@@ -467,32 +471,43 @@ class CalculatorStack(Stack):
 
     def _create_alarms(self) -> None:
         """Create CloudWatch alarms for monitoring."""
-        # High error rate alarm
-        cloudwatch.Alarm(
-            self, "HighErrorRateAlarm",
-            alarm_name="calculator-high-error-rate",
-            metric=self.calculator_lambda.metric_errors(statistic="Sum"),
-            threshold=10,
-            evaluation_periods=2,
-            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-            alarm_description="Alert when error count exceeds threshold"
+        stage = self.config['api_gateway']['stage_name']
+
+        # SRE Platform monitoring - custom error metrics from @observe decorator
+        # This monitors ALL handled exceptions (ValidationError, DivisionByZeroError, etc.)
+        # not just unhandled Lambda crashes
+        add_sre_monitoring(
+            scope=self,
+            lambda_fn=self.calculator_lambda,
+            service_name="calculator",
+            stage=stage,
+            error_threshold=10,
+            evaluation_periods=2
+        )
+
+        # Additional monitoring for performance and API Gateway errors
+        alarm_topic_arn = Fn.import_value(f"IncidentAlarmTopicArn-{stage}")
+        alarm_topic = sns.Topic.from_topic_arn(
+            self, "SREAlarmTopic",
+            alarm_topic_arn
         )
 
         # High latency alarm
-        cloudwatch.Alarm(
+        high_latency_alarm = cloudwatch.Alarm(
             self, "HighLatencyAlarm",
-            alarm_name="calculator-high-latency",
+            alarm_name=f"calculator-high-latency-{stage}",
             metric=self.calculator_lambda.metric_duration(statistic="p99"),
             threshold=500,  # 500ms
             evaluation_periods=2,
             comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
             alarm_description="Alert when p99 latency exceeds 500ms"
         )
+        high_latency_alarm.add_alarm_action(cw_actions.SnsAction(alarm_topic))
 
-        # High 4XX error rate alarm (validation errors)
-        cloudwatch.Alarm(
+        # High 4XX error rate alarm (validation errors at API Gateway level)
+        high_4xx_alarm = cloudwatch.Alarm(
             self, "High4XXErrorAlarm",
-            alarm_name="calculator-high-4xx-errors",
+            alarm_name=f"calculator-high-4xx-errors-{stage}",
             metric=cloudwatch.Metric(
                 namespace="AWS/ApiGateway",
                 metric_name="4XXError",
@@ -504,6 +519,7 @@ class CalculatorStack(Stack):
             comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
             alarm_description="Alert when 4XX error count exceeds threshold (high validation error rate)"
         )
+        high_4xx_alarm.add_alarm_action(cw_actions.SnsAction(alarm_topic))
 
     def _create_outputs(self) -> None:
         """Create stack outputs."""

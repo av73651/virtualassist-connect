@@ -10,6 +10,7 @@ from aws_cdk import App, Environment
 from stacks.auth_stack import AuthStack
 from stacks.hello_world_stack import HelloWorldStack
 from stacks.calculator_stack import CalculatorStack
+from stacks.sre_platform_stack import SrePlatformStack
 
 app = App()
 
@@ -55,6 +56,17 @@ CalculatorStack(
     config=config,
     user_pool=auth_stack.user_pool,
     description=f"Calculator API Stack ({target_env})"
+)
+
+# SRE Platform Stack (event-driven, no API Gateway)
+# stack_name matches the previously deployed IncidentManagerStack to enable in-place update
+SrePlatformStack(
+    app,
+    f"SrePlatformStack-{target_env}",
+    env=aws_env,
+    config=config,
+    stack_name=f"IncidentManagerStack-{target_env}",
+    description=f"SRE Platform Pipeline Stack ({target_env})",
 )
 
 app.synth()

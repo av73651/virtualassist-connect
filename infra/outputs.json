@@ -1,0 +1,15 @@
+{
+  "IncidentManagerStack-dev": {
+    "DetectionLambdaName": "incident-detection-dev",
+    "CheckpointBucketName": "sre-checkpoint-manifests-dev-320644769527",
+    "EscalationLambdaName": "incident-escalation-dev",
+    "TriageLambdaName": "incident-triage-dev",
+    "TriageDLQUrl": "https://sqs.us-west-2.amazonaws.com/320644769527/incident-triage-dlq-dev",
+    "CheckpointTableName": "sre-checkpoints-dev",
+    "EscalationDLQUrl": "https://sqs.us-west-2.amazonaws.com/320644769527/incident-escalation-dlq-dev",
+    "CorrelationTableName": "incident-correlation-dev",
+    "DetectionDLQUrl": "https://sqs.us-west-2.amazonaws.com/320644769527/incident-detection-dlq-dev",
+    "NotificationTopicArn": "arn:aws:sns:us-west-2:320644769527:incident-engineer-notifications-dev",
+    "AlarmTopicArn": "arn:aws:sns:us-west-2:320644769527:incident-alarm-ingestion-dev"
+  }
+}
